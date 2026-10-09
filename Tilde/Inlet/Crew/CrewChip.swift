@@ -2,38 +2,31 @@ import SwiftUI
 import TildeKit
 
 /// A worker, as tilde mentions it: a small chip under what tilde said about
-/// the job. Click it to see what it's doing and what you can do about it.
+/// the job. Click it to open the job: its agent's conversation and its changes.
 struct CrewChip: View {
-    @Environment(Inlet.self) private var inlet
     var job: Job
     var actions: InletActions
-
-    private var expanded: Bool { inlet.focusedJob == job.id }
+    @State private var hovered = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Button {
-                withAnimation(Theme.spring) { inlet.focusedJob = expanded ? nil : job.id }
-            } label: {
-                HStack(spacing: 7) {
-                    StatusDot(phase: job.phase, size: 7)
-                    Text(job.title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
-                    Text(job.harness.label).font(.system(size: 11)).foregroundStyle(Theme.text3).lineLimit(1)
-                    JobStatus(job: job)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(Theme.raised, in: .capsule)
-                .overlay(Capsule().strokeBorder(job.phase == .needsYou ? Theme.amber.opacity(0.5) : .clear, lineWidth: 1))
-                .contentShape(.capsule)
+        Button { actions.openJob(job) } label: {
+            HStack(spacing: 7) {
+                StatusDot(phase: job.phase, size: 7)
+                Text(job.title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                Text(job.harness.label).font(.system(size: 11)).foregroundStyle(Theme.text3).lineLimit(1)
+                JobStatus(job: job)
+                Image(systemName: "chevron.right").font(.system(size: 8, weight: .heavy)).foregroundStyle(Theme.text3)
+                    .opacity(hovered ? 1 : 0)
             }
-            .buttonStyle(.plain)
-
-            if expanded {
-                JobDetail(job: job, actions: actions)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(hovered ? Color.white.opacity(0.12) : Theme.raised, in: .capsule)
+            .overlay(Capsule().strokeBorder(job.phase == .needsYou ? Theme.amber.opacity(0.5) : .clear, lineWidth: 1))
+            .contentShape(.capsule)
         }
+        .buttonStyle(.plain)
+        .onHover { hovered = $0 }
+        .animation(Theme.quick, value: hovered)
     }
 }
 

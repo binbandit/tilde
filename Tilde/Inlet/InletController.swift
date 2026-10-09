@@ -41,7 +41,7 @@ final class InletController {
     var actions: InletActions {
         InletActions(
             send: { [weak self] in self?.send($0) },
-            review: { [weak self] in self?.review($0) },
+            openJob: { [weak self] in self?.openJob($0) },
             compose: { [weak self] in if self?.inlet.mode != .compose { self?.set(.compose) } },
             dismiss: { [weak self] in self?.set(.rest) })
     }
@@ -91,18 +91,17 @@ final class InletController {
         panel.place(placement.frame)
     }
 
-    func set(_ mode: Inlet.Mode) {
+    /// `focus: false` shows a mode that wants the keyboard without taking it (debug routes,
+    /// so screenshots never steal what you're typing).
+    func set(_ mode: Inlet.Mode, focus: Bool = true) {
         guard inlet.mode != mode else { return }
         inlet.mode = mode
         if mode != .open { pinnedOpen = false }
-        if mode == .rest {
-            exchangeTarget = nil
-            inlet.focusedJob = nil
-        }
+        if mode == .rest { exchangeTarget = nil }
         // Held news is told while you're looking.
         model.conductor?.looking = inlet.isConversation
-        panel?.acceptsKey = inlet.wantsKey
-        if inlet.wantsKey {
+        panel?.acceptsKey = inlet.wantsKey && focus
+        if inlet.wantsKey && focus {
             NSApp.activate()
             panel?.makeKey()
         } else if panel?.isKeyWindow == true {
@@ -113,7 +112,7 @@ final class InletController {
 
     private func resignedKey() {
         switch inlet.mode {
-        case .review: set(.rest)
+        case .job: set(.rest)
         case .compose where model.draft.isEmpty: set(.rest)
         default: break
         }
@@ -122,10 +121,10 @@ final class InletController {
     // MARK: Talking
 
     /// A tap of the tilde key: the conversation opens with the composer ready.
-    func compose(about referent: Referent?) {
+    func compose(about referent: Referent?, focus: Bool = true) {
         exchangeTarget = referent
         if let referent { lens.flash(on: referent) }
-        set(.compose)
+        set(.compose, focus: focus)
     }
 
     /// The tilde key is held: your words appear in the conversation as you speak.
@@ -154,7 +153,7 @@ final class InletController {
         }
     }
 
-    func review(_ job: Job) { set(.review(job.id)) }
+    func openJob(_ job: Job, focus: Bool = true) { set(.job(job.id), focus: focus) }
 
     /// New words from tilde peek out of the edge, unless the conversation is
     /// already open; the peek settles once it's been read.
@@ -212,7 +211,7 @@ final class InletController {
 
     private func pointerMoved() {
         guard let panel else { return }
-        if case .review = inlet.mode { return }
+        if case .job = inlet.mode { return }
         let mouse = NSEvent.mouseLocation
         let rect = inletRect
         // At rest the target is the sliver plus a band along the very edge.

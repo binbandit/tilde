@@ -81,7 +81,7 @@ final class Listener {
         let node = engine.inputNode
         let micFormat = node.outputFormat(forBus: 0)
         let converter = AVAudioConverter(from: micFormat, to: format)
-        node.installTap(onBus: 0, bufferSize: AVAudioFrameCount(micFormat.sampleRate / 10), format: micFormat) { [weak self] buffer, _ in
+        try node.tap(bufferSize: AVAudioFrameCount(micFormat.sampleRate / 10), format: micFormat) { [weak self] buffer, _ in
             let rms = Listener.rms(buffer)
             Task { @MainActor in
                 guard let self else { return }
@@ -126,5 +126,14 @@ final class Listener {
         var sum: Float = 0
         for i in 0..<Int(buffer.frameLength) { sum += data[i] * data[i] }
         return min(1, Double(sqrt(sum / Float(buffer.frameLength))) * 8)
+    }
+}
+
+extension AVAudioNode {
+    /// Taps the node's output, throwing instead of raising when it can't. This is the macOS 27
+    /// tap underneath its Swift refinement, which the SDK doesn't ship yet (its error comes
+    /// through as a throw, leaving an empty `error:` argument).
+    fileprivate func tap(bufferSize: AVAudioFrameCount, format: AVAudioFormat?, block: @escaping AVAudioNodeTapBlock) throws {
+        try __installTap(onBus: 0, bufferSize: bufferSize, format: format, error: (), block: block)
     }
 }

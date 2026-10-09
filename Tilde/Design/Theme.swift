@@ -19,7 +19,11 @@ enum Theme {
     static let focus = Color(red: 0.04, green: 0.52, blue: 1.0)
 
     static let spring = Animation.spring(response: 0.42, dampingFraction: 0.8)
-    static let morph = Animation.spring(response: 0.5, dampingFraction: 0.78)
+    /// The Inlet opening out of the bezel, with a little give at the end.
+    static let morph = Animation.spring(response: 0.5, dampingFraction: 0.8)
+    /// The Inlet going back into the bezel: a touch quicker, and nearly settled, so it
+    /// slips in rather than slams.
+    static let tuck = Animation.spring(response: 0.44, dampingFraction: 0.88)
     static let quick = Animation.spring(response: 0.24, dampingFraction: 0.9)
 
     static func tint(_ phase: Job.Phase) -> Color {

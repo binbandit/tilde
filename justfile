@@ -24,7 +24,8 @@ test:
 smoke repo utterance *flags:
     cd Packages/TildeKit && swift build --product tilde-smoke && TILDE_HOME=${TILDE_HOME:-/tmp/tilde-smoke} .build/debug/tilde-smoke {{repo}} "{{utterance}}" {{flags}}
 
-# Show a surface with fixture data: just show desk|review|caret|caption|listen|fixtures|clear
+# Show the Inlet with fixture data, without taking the keyboard:
+# just show fixtures|empty|clear|hide|frame, inlet "?mode=rest|open|compose|peek", listen "?text=...", job "?id=j-r4k2", place "?edge=top&notch=1"
 show surface *query:
     open "tilde://debug/{{surface}}{{query}}"
 

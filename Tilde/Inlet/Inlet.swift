@@ -19,16 +19,14 @@ final class Inlet {
         case compose
         /// The tilde key is held: your words appear in the conversation as you say them.
         case listening
-        /// A job's work, opened wide.
-        case review(String)
+        /// A job opened wide: its agent's conversation, its changes, and what you can do.
+        case job(String)
     }
 
     var mode: Mode = .rest
     var placement = InletPlacement()
     /// The shape's frame in the panel's SwiftUI space, for hit-testing.
     var shapeFrame: CGRect = .zero
-    /// The job whose details are expanded in the conversation, if any.
-    var focusedJob: String?
 
     /// Modes that show the whole conversation.
     var isConversation: Bool { [.open, .compose, .listening].contains(mode) }
@@ -36,7 +34,7 @@ final class Inlet {
     /// Modes that need the keyboard.
     var wantsKey: Bool {
         switch mode {
-        case .compose, .review: true
+        case .compose, .job: true
         default: false
         }
     }

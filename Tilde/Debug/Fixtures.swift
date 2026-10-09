@@ -20,10 +20,11 @@ enum Fixtures {
             return job
         }
         var ready = job("j-r4k2", "Pricing page copy", "paradise", .claude, .ready, "Ready for review", minutes: 23)
+        ready.brief = "Rewrite the pricing page copy to match the new plans."
         ready.summary = "Rewrote the pricing tiers' copy to match the new plans and tightened the FAQ. `pnpm build` and the page's tests pass."
         ready.diff = DiffStat(files: 3, insertions: 48, deletions: 19)
         let jobs = [
-            job("j-n8v3", "Navigation bar", "paradise", .claude, .working, "Running xcodebuild for the preview", minutes: 6),
+            job("j-n8v3", "Navigation bar", "paradise", .claude, .working, "Checking the header in the browser", minutes: 6),
             job("j-q2m7", "Cart tests", "paradise", .codex, .needsYou, "Waiting on you", minutes: 11),
             ready,
             job("j-z5x9", "Fix flaky login spec", "sayso-web", .codex, .deciding, "tilde is deciding", minutes: 2),
@@ -49,7 +50,58 @@ enum Fixtures {
                 jobs: ["j-r4k2"], noted: ["Wants pricing copy short and plain."]),
             Message(from: .tilde, text: offer.question, at: ago(1), attentionID: offer.id),
         ]
-        return AppModel.Fixture(thread: thread, jobs: jobs, attention: [ask, offer], diff: sampleDiff)
+        return AppModel.Fixture(thread: thread, jobs: jobs, attention: [ask, offer], transcripts: transcripts(ago), diff: sampleDiff)
+    }
+
+    /// What each agent was told, said, did and asked.
+    private static func transcripts(_ ago: (Double) -> Date) -> [String: [JobEntry]] {
+        func e(_ minutes: Double, _ from: JobEntry.Speaker, _ kind: JobEntry.Kind, _ text: String) -> JobEntry {
+            JobEntry(at: ago(minutes), from: from, kind: kind, text: text)
+        }
+        return [
+            "j-r4k2": [
+                e(23, .tilde, .message, """
+                    Rewrite the pricing page copy in paradise to match the new plans: Free ($0, side projects) and Team ($12 per seat, \
+                    billed yearly). Keep it short and plain, the way Brayden writes. Tighten the FAQ answers while you're there. The page \
+                    lives in app/pricing. Run `pnpm build` and the page's tests before you finish, and don't push.
+                    """),
+                e(23, .agent, .message, "I'll start by reading the current pricing page and FAQ to see what's there."),
+                e(22, .agent, .step, "Reading app/pricing/page.tsx"),
+                e(22, .agent, .step, "Reading app/pricing/faq.ts"),
+                e(22, .agent, .step, "Searching for Tier usages"),
+                e(21, .agent, .message, "The tiers still say Starter at $9. I'll replace them with Free and Team, add a one-line subtitle, and trim the cancel answer."),
+                e(20, .agent, .step, "Editing app/pricing/page.tsx"),
+                e(19, .agent, .step, "Editing app/pricing/faq.ts"),
+                e(18, .agent, .step, "Running pnpm build"),
+                e(16, .agent, .step, "Running pnpm test app/pricing"),
+                e(15, .agent, .message, "Done. Both tiers are rewritten, the FAQ is tighter, and `pnpm build` and the pricing tests pass."),
+                e(15, .agent, .turnEnded, "3 files +48 −19"),
+                e(14, .tilde, .message, "Highlight the Team tier, it's the one most people should pick."),
+                e(13, .agent, .step, "Editing app/pricing/page.tsx"),
+                e(12, .agent, .step, "Running pnpm test app/pricing"),
+                e(11, .agent, .message, "Team is highlighted now. Tests still pass."),
+                e(11, .agent, .turnEnded, "3 files +48 −19"),
+                e(10, .tilde, .event, "Ready for review: rewrote the pricing tiers' copy and tightened the FAQ."),
+            ],
+            "j-q2m7": [
+                e(11, .tilde, .message, "Cover paradise's cart with tests: adding, removing and changing quantities, totals with tax, and checkout handoff. Use the existing Vitest setup."),
+                e(11, .agent, .step, "Reading src/cart/store.ts"),
+                e(10, .agent, .step, "Reading src/cart/checkout.ts"),
+                e(10, .agent, .step, "Listing src/cart/__tests__"),
+                e(9, .agent, .message, "Checkout calls Stripe directly. Before I write those tests: should I mock Stripe, or call the test-mode API?"),
+                e(9, .agent, .request, "Mock Stripe in the cart tests, or hit the test-mode API?"),
+                e(9, .tilde, .request, "Mock Stripe in the cart tests, or hit the test-mode API?"),
+            ],
+            "j-n8v3": [
+                e(6, .tilde, .message, "Create a navigation bar in paradise: sticky, like the headers in Brayden's other apps, with Home, Pricing and Account."),
+                e(6, .agent, .step, "Reading app/layout.tsx"),
+                e(5, .agent, .step, "Writing components/nav-bar.tsx"),
+                e(4, .agent, .request, "Bash: npm install @radix-ui/react-navigation-menu"),
+                e(4, .tilde, .decision, "allowed"),
+                e(3, .agent, .step, "Editing app/layout.tsx"),
+                e(1, .agent, .step, "Checking the header in the browser"),
+            ],
+        ]
     }
 
     static let sampleDiff = """

@@ -28,13 +28,13 @@ nonisolated enum InletEdge: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Where content sits inside the shape while it morphs: against the inner
-    /// side, so anything that overflows spills toward the bezel.
-    var inward: Alignment {
+    /// Where content sits inside the shape while it morphs: against the bezel, so the
+    /// shape reveals it out of the edge and covers it again on the way back.
+    var bezel: Alignment {
         switch self {
-        case .right: .leading
-        case .left: .trailing
-        case .top: .bottom
+        case .right: .trailing
+        case .left: .leading
+        case .top: .top
         }
     }
 
