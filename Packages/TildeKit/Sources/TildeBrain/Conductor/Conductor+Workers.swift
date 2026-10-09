@@ -10,9 +10,11 @@ extension Conductor {
     /// Starts `job`'s worker. `resume` reopens its session instead of starting a new one.
     func spawn(_ job: Job, brief: String, resume: Bool) async throws {
         guard let spec = job.harness.spec else { throw UnknownHarness(harness: job.harness) }
+        // A worktree's commits are written to the repo's own git directory.
+        let writable = job.isolation == .worktree ? [(job.repoPath as NSString).appendingPathComponent(".git")] : []
         let worker = spec.make(WorkerLaunch(
             workdir: job.workdir, sessionID: job.sessionID, resume: resume, model: job.model,
-            instructions: Supervision.brief(owner: Owner.firstName)))
+            instructions: Supervision.brief(owner: Owner.firstName), writable: writable))
         workers[job.id] = worker
         Task { [weak self] in
             for await event in worker.events { self?.handle(event, from: job.id) }
@@ -27,15 +29,19 @@ extension Conductor {
         case .session(let id):
             update(jobID) { $0.sessionID = id }
         case .activity(let text):
+            record(jobID, .agent, .step, text)
             update(jobID) {
                 $0.ticker = text
                 if $0.phase == .starting { $0.phase = .working }
             }
         case .message(let text):
+            record(jobID, .agent, .message, text)
             update(jobID) { $0.summary = text }
         case .notice(let text):
+            record(jobID, .agent, .event, text)
             update(jobID) { $0.ticker = text }
         case .request(let request):
+            record(jobID, .agent, .request, request.headline)
             requests[request.id] = (jobID, request)
             update(jobID) { $0.phase = .deciding }
             Task { await manager.post(.init(Self.describe(request, job: jobID), jobs: [jobID])) }
@@ -44,6 +50,7 @@ extension Conductor {
             Task {
                 var diff: DiffStat?
                 if let base = job.baseCommit { diff = await Git.diffStat(workdir: job.workdir, base: base) }
+                record(jobID, .agent, .turnEnded, diff?.label ?? "")
                 update(jobID) {
                     $0.diff = diff
                     $0.phase = .deciding
@@ -63,6 +70,7 @@ extension Conductor {
                 $0.phase = detail == nil ? .stopped : .failed
                 $0.ticker = detail.map { $0.clipped(to: 80) } ?? "Stopped"
             }
+            record(jobID, .agent, .event, detail ?? "Exited")
             for (id, pending) in requests where pending.job == jobID { requests.removeValue(forKey: id) }
             Task {
                 await manager.post(.init(
@@ -72,7 +80,7 @@ extension Conductor {
     }
 
     /// Answers a worker's open request and logs the decision on its job.
-    func resolve(_ requestID: String, _ answer: WorkerAnswer) {
+    func resolve(_ requestID: String, _ answer: WorkerAnswer, by decider: JobEntry.Speaker) {
         guard let pending = requests.removeValue(forKey: requestID), let worker = workers[pending.job] else { return }
         Task { await worker.resolve(requestID, answer) }
         update(pending.job) { if [.deciding, .needsYou].contains($0.phase) { $0.phase = .working } }
@@ -83,6 +91,7 @@ extension Conductor {
             case .reply(let text): "answered: \(text)"
             }
         log.append(pending.job, "\(pending.request.headline): \(verdict)")
+        record(pending.job, decider, .decision, verdict)
     }
 
     nonisolated static func describe(_ request: WorkerRequest, job: String) -> String {

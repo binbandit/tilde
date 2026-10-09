@@ -47,7 +47,7 @@ extension Conductor {
             case "deny": .deny(text.isEmpty ? "Not allowed." : text)
             default: .reply(text)
             }
-        resolve(id, answer)
+        resolve(id, answer, by: .tilde)
         return .ok("Done.")
     }
 
@@ -64,6 +64,7 @@ extension Conductor {
             $0.ticker = "Ready for review"
         }
         log.outcome(id, "\(summary)\n\nChanges: \(diff?.label ?? "unknown")")
+        record(id, .tilde, .event, "Ready for review: \(summary)")
         log.journal("\(job.title) in \(job.projectName) is ready for review (\(id))")
         await memory.notebook.commitChanges(context: "\(id) ready")
         Task { await scribe.reflect(on: "A job finished. Project: \(job.projectName). Brief: \(job.brief)\nOutcome: \(summary)") }

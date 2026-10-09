@@ -92,8 +92,8 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
                 } else if action.hasPrefix("option.") {
                     model.answer(item, with: action.split(separator: ".", maxSplits: 2).last.map(String.init) ?? "")
                 }
-            } else if let job = model.job(jobID), job.phase == .ready {
-                inlet.review(job)
+            } else if let job = model.job(jobID) {
+                inlet.openJob(job)
             }
         }
     }

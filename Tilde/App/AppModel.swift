@@ -28,6 +28,7 @@ final class AppModel {
         var thread: [Message] = []
         var jobs: [Job] = []
         var attention: [Attention] = []
+        var transcripts: [String: [JobEntry]] = [:]
         var diff = ""
     }
 
@@ -48,6 +49,9 @@ final class AppModel {
     var openJobs: [Job] { jobs.filter(\.phase.isOpen).sorted { $0.createdAt < $1.createdAt } }
 
     func job(_ id: String?) -> Job? { id.flatMap { id in jobs.first { $0.id == id } } }
+
+    /// What's waiting on you about a job, if anything.
+    func question(for jobID: String) -> Attention? { attention.last { $0.jobID == jobID } }
 
     /// The question tilde most recently asked that's still waiting.
     var openQuestion: Attention? {
@@ -75,6 +79,34 @@ final class AppModel {
             return
         }
         conductor?.answer(item.id, with: reply, always: always)
+    }
+
+    // MARK: A job's agent
+
+    /// The job's conversation with its agent. Call `loadTranscript` first so it stays current.
+    func transcript(_ jobID: String) -> [JobEntry] { fixture?.transcripts[jobID] ?? conductor?.transcripts[jobID] ?? [] }
+
+    func loadTranscript(_ jobID: String) {
+        guard fixture == nil else { return }
+        conductor?.loadTranscript(jobID)
+    }
+
+    /// Talks to the job's agent directly.
+    func message(_ job: Job, _ text: String) async throws {
+        if fixture != nil {
+            fixture?.transcripts[job.id, default: []].append(JobEntry(from: .you, kind: .message, text: text))
+            if let i = fixture?.jobs.firstIndex(where: { $0.id == job.id }) {
+                fixture?.jobs[i].phase = .working
+                fixture?.jobs[i].ticker = "Working on your message"
+            }
+            return
+        }
+        try await conductor?.message(job.id, text)
+    }
+
+    func stop(_ job: Job) async {
+        guard fixture == nil else { return }
+        await conductor?.stop(job.id)
     }
 
     // MARK: Review

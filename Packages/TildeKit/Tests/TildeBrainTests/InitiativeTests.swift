@@ -9,7 +9,7 @@ import TildeWork
 
     func initiative() throws -> Initiative {
         try home.prepare()
-        return Initiative(home: home, projects: ProjectIndex(roots: []))
+        return Initiative(home: home)
     }
 
     func notice(_ key: String, _ urgency: Notice.Urgency, subject: String? = nil) -> Notice {

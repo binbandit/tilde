@@ -7,12 +7,11 @@ import WorkerKit
 extension Conductor {
     // MARK: Brayden
 
-    /// Brayden said something. Returns the tap id his caption follows.
+    /// Brayden said something. Returns the id of tilde's reply in the thread.
     @discardableResult
     public func tap(_ text: String, context: TapContext = TapContext()) -> String {
         let id = IDs.make("t")
         Task { await dreamer.catchUp() }
-        caption = Caption(tapID: id, said: text, text: "", done: false, noted: [])
         append(Message(from: .you, text: text, pointing: context.pointing, jobs: context.jobID.map { [$0] } ?? []))
         append(Message(id: id, from: .tilde, text: "", streaming: true))
         replying = id
@@ -45,7 +44,7 @@ extension Conductor {
                 case .permission: WorkerAnswer.isYes(reply) ? .allow : .deny("\(Owner.firstName) said: \(reply)")
                 case .question: .reply(reply)
                 }
-            resolve(requestID, answer)
+            resolve(requestID, answer, by: .you)
             forwarded = true
         }
         if let jobID = item.jobID { update(jobID) { if $0.phase == .needsYou { $0.phase = .working } } }
@@ -54,7 +53,10 @@ extension Conductor {
         if always, let job {
             Task { try? await memory.notebook.addRule("\(reply) when asked \"\(item.question)\" in \(job.projectName).") }
         }
-        if let jobID = item.jobID { log.append(jobID, "\(Owner.firstName) answered \"\(item.question)\": \(reply)") }
+        if let jobID = item.jobID {
+            log.append(jobID, "\(Owner.firstName) answered \"\(item.question)\": \(reply)")
+            if !forwarded { record(jobID, .you, .decision, "answered tilde: \(reply)") }
+        }
         if let i = thread.firstIndex(where: { $0.attentionID == item.id }) { thread[i].attentionID = nil }
         append(Message(from: .you, text: reply + (always ? " (always)" : ""), jobs: item.jobID.map { [$0] } ?? []))
 
@@ -69,20 +71,13 @@ extension Conductor {
         }
     }
 
-    public func dismissCaption() { caption = nil }
-
     // MARK: Manager output
 
     func handle(_ output: Manager.Output) {
         switch output {
         case .reply(let taps, let text):
-            if let caption, taps.contains(caption.tapID) { self.caption?.text = text }
             for tap in taps { writeReply(tap, text, done: false) }
         case .replyDone(let taps, let text):
-            if let caption, taps.contains(caption.tapID) {
-                self.caption?.text = text.isEmpty ? self.caption!.text : text
-                self.caption?.done = true
-            }
             for tap in taps { writeReply(tap, text, done: true) }
             replying = nil
             Task {
@@ -93,7 +88,6 @@ extension Conductor {
         case .trouble(let text):
             trouble = text
             signal.yield(.trouble(text))
-            if caption?.done == false { caption?.text = text; caption?.done = true }
             if let replying, let i = thread.firstIndex(where: { $0.id == replying }), thread[i].text.isEmpty {
                 thread[i].text = text
                 thread[i].trouble = true
@@ -111,12 +105,12 @@ extension Conductor {
         written.forEach { appendNoted($0.fact) }
     }
 
+    /// Shows a fact tilde filed under the reply being written, or else what it said last.
     func appendNoted(_ fact: String) {
-        if caption != nil { caption?.noted.append(fact) }
-        if let i = thread.lastIndex(where: { $0.from == .tilde && !$0.streaming }), !thread[i].noted.contains(fact) {
-            thread[i].noted.append(fact)
-            saveThread()
-        }
+        let reply = replying.flatMap { id in thread.firstIndex { $0.id == id } }
+        guard let i = reply ?? thread.lastIndex(where: { $0.from == .tilde }), !thread[i].noted.contains(fact) else { return }
+        thread[i].noted.append(fact)
+        saveThread()
     }
 
     // MARK: Thread

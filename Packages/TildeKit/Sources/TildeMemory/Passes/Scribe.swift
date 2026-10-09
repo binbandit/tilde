@@ -10,7 +10,7 @@ public actor Scribe {
     private let model: any MemoryModel
     private var queue: [String] = []
     private var running = false
-    /// Facts filed, for the caption's "Noted" chip.
+    /// Facts filed, for the "Noted" line under tilde's words.
     public nonisolated let noted: AsyncStream<[Memory.Written]>
     private let emit: AsyncStream<[Memory.Written]>.Continuation
 

@@ -18,6 +18,7 @@ extension Conductor {
         await Git.removeWorktree(job, deleteBranch: true)
         update(jobID) { $0.phase = .landed; $0.ticker = "Landed" }
         log.append(jobID, "Landed into \(job.projectName)")
+        record(jobID, .you, .event, "Brought it into \(job.baseBranch ?? job.projectName)")
         log.journal("Landed \(job.title) in \(job.projectName)")
         await memory.notebook.commitChanges(context: "landed \(jobID)")
         Task { await scribe.reflect(on: "\(Owner.firstName) reviewed and landed the job \"\(job.title)\" in \(job.projectName). Brief: \(job.brief)\nSummary: \(job.summary ?? "")") }
@@ -30,6 +31,7 @@ extension Conductor {
         dropAttention(for: jobID)
         update(jobID) { $0.phase = .stopped; $0.ticker = "Discarded" }
         log.append(jobID, "Discarded by \(Owner.firstName)")
+        record(jobID, .you, .event, "Discarded")
         await memory.notebook.commitChanges(context: "discarded \(jobID)")
         Task { await manager.post(.init("<worker-stopped job=\"\(jobID)\">\(Owner.firstName) discarded this job.</worker-stopped>", jobs: [jobID])) }
     }
@@ -48,6 +50,7 @@ extension Conductor {
         await stopWorker(jobID)
         update(jobID) { $0.phase = .landed; $0.ticker = "Done" }
         log.append(jobID, "\(Owner.firstName) marked it done")
+        record(jobID, .you, .event, "Marked it done")
         await memory.notebook.commitChanges(context: "\(jobID) done")
     }
 
@@ -58,6 +61,7 @@ extension Conductor {
         dropAttention(for: jobID)
         update(jobID) { $0.phase = .stopped; $0.ticker = "Taken over" }
         log.append(jobID, "\(Owner.firstName) took over in a terminal")
+        record(jobID, .you, .event, "Took over in a terminal")
         return (command, job.workdir)
     }
 }

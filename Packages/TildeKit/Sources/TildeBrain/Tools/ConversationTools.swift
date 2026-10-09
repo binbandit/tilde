@@ -51,7 +51,10 @@ extension Conductor {
             recommended: args["recommended"]?.int, detail: args["detail"]?.string, requestID: pending == nil ? nil : requestID,
             isApproval: isApproval)
         raise(item)
-        if let jobID { log.append(jobID, "Asked \(Owner.firstName): \(question)") }
+        if let jobID {
+            log.append(jobID, "Asked \(Owner.firstName): \(question)")
+            record(jobID, .tilde, .request, question)
+        }
         return .ok("Asked (\(item.id)). The answer will arrive as <answer to=\"\(item.id)\">\(pending != nil ? " and goes straight to the worker" : "").")
     }
 

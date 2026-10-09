@@ -107,7 +107,7 @@ struct CannedModel: MemoryModel {
     func initiative(agenda: String = "") throws -> Initiative {
         try home.prepare()
         try agenda.write(to: home.notebook.appending(path: "agenda.md"), atomically: true, encoding: .utf8)
-        return Initiative(home: home, projects: ProjectIndex(roots: []), review: CannedModel())
+        return Initiative(home: home, review: CannedModel())
     }
 
     func due(_ initiative: Initiative, _ now: String) async -> [String] {

@@ -49,7 +49,8 @@ extension Conductor {
                 fact, about: about, kind: args["kind"]?.string.flatMap(Memory.Kind.init),
                 section: args["section"]?.string ?? "Facts", source: "told")
             emit(.noted([written]))
-            if caption != nil { appendNoted(written.fact) }
+            // Told mid-conversation, it shows under the reply.
+            if replying != nil { appendNoted(written.fact) }
             return .ok(written.replaced.map { "Updated \(written.path) (replaced: \($0))." } ?? "Saved to \(written.path).")
         } catch {
             return .error("\(error)")

@@ -111,6 +111,7 @@ extension Conductor {
         addJob(job)
         mention(job.id)
         log.open(job)
+        record(job.id, .tilde, .message, brief)
         log.journal("Started \(job.title) in \(job.projectName) with \(spec.label) (\(job.id))")
         try await spawn(job, brief: brief, resume: false)
         return .ok("Started \(job.id) with \(spec.label) in \(place).")
@@ -118,15 +119,9 @@ extension Conductor {
 
     private func toolSteer(_ args: JSON) async -> ToolResult {
         guard let id = args["job"]?.string, let message = args["message"]?.string else { return .error("job and message are required.") }
-        guard let job = job(id) else { return .error("No job \(id).") }
+        guard job(id) != nil else { return .error("No job \(id).") }
         do {
-            if let worker = workers[id] {
-                try await worker.steer(message)
-            } else {
-                // The worker had stopped: bring it back, on the same session when it got as far as having one.
-                try await spawn(job, brief: message, resume: job.sessionID != nil)
-            }
-            update(id) { $0.phase = .working; $0.ticker = "Working on feedback" }
+            try await deliver(message, to: id, from: .tilde)
             mention(id)
             log.append(id, "Steered: \(message)")
             return .ok("Sent to \(id).")
@@ -139,6 +134,7 @@ extension Conductor {
         guard let id = args["job"]?.string, job(id) != nil else { return .error("No such job.") }
         await stopWorker(id)
         update(id) { $0.phase = .stopped; $0.ticker = "Stopped" }
+        record(id, .tilde, .event, "Stopped")
         log.append(id, "Stopped by the manager")
         return .ok("Stopped \(id).")
     }

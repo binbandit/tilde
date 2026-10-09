@@ -21,7 +21,7 @@ if let i = args.firstIndex(of: "--recall") {
 
 // `tilde-smoke --initiative [repo]`: what tilde would notice right now (read-only).
 if args.contains("--initiative") {
-    let initiative = Initiative(home: .default, projects: ProjectIndex(roots: ProjectIndex.defaultRoots))
+    let initiative = Initiative(home: .default)
     let focused = args.firstIndex(of: "--initiative").flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
     _ = await initiative.look(jobs: [], focusedRepo: focused)  // baseline
     print("waiting agents:")
@@ -107,18 +107,19 @@ Task { @MainActor in
     }
 }
 
-conductor.tap(utterance, context: TapContext(app: "Ghostty", windowTitle: (repo as NSString).lastPathComponent, cwd: repo, repo: repo))
+let replyID = conductor.tap(utterance, context: TapContext(app: "Ghostty", windowTitle: (repo as NSString).lastPathComponent, cwd: repo, repo: repo))
 
-var lastCaption = ""
+var printed = Set<String>()
 var settledAt: Date?
 while Date().timeIntervalSince(started) < 900 {
     try await Task.sleep(for: .milliseconds(500))
-    if let caption = conductor.caption, caption.done, caption.text != lastCaption {
-        lastCaption = caption.text
-        print("\(stamp()) CAPTION \(caption.text)")
+    for message in conductor.thread where message.from == .tilde && !message.streaming && !printed.contains(message.id) {
+        printed.insert(message.id)
+        print("\(stamp()) TILDE \(message.text)")
     }
+    let replied = conductor.thread.contains { $0.id == replyID && !$0.streaming }
     let open = conductor.jobs.contains { $0.phase.isActive }
-    let settled = conductor.caption?.done == true && !open && conductor.attention.isEmpty
+    let settled = replied && !open && conductor.attention.isEmpty
     if settled {
         settledAt = settledAt ?? Date()
         // Give the manager a moment to react to the last event before calling it.

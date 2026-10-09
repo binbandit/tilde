@@ -14,23 +14,6 @@ import WorkerKit
 /// passes (`+Memory`), state on disk (`+Persistence`), and the manager's tools (`Tools/`).
 @MainActor @Observable
 public final class Conductor {
-    /// A reply in progress, shown as a caption by the cursor.
-    public struct Caption: Sendable, Equatable {
-        public var tapID: String
-        public var said: String
-        public var text: String
-        public var done: Bool
-        public var noted: [String]
-
-        public init(tapID: String, said: String, text: String, done: Bool, noted: [String]) {
-            self.tapID = tapID
-            self.said = said
-            self.text = text
-            self.done = done
-            self.noted = noted
-        }
-    }
-
     /// Things the app turns into notifications, sounds, or surfaces.
     public enum Signal: Sendable {
         case asked(Attention)
@@ -45,8 +28,9 @@ public final class Conductor {
     public internal(set) var thread: [Message] = []
     public internal(set) var jobs: [Job] = []
     public internal(set) var attention: [Attention] = []
-    public internal(set) var caption: Caption?
     public internal(set) var trouble: String?
+    /// The conversations of jobs someone is looking at (`loadTranscript`), by job id.
+    public internal(set) var transcripts: [String: [JobEntry]] = [:]
 
     @ObservationIgnored public let signals: AsyncStream<Signal>
     @ObservationIgnored let signal: AsyncStream<Signal>.Continuation
@@ -65,6 +49,7 @@ public final class Conductor {
     @ObservationIgnored var requests: [String: (job: String, request: WorkerRequest)] = [:]
     @ObservationIgnored let log: TaskLog
     @ObservationIgnored let threads: ThreadStore
+    @ObservationIgnored let transcriptStore: TranscriptStore
     /// The tilde message a tap's reply is being written into, while it's being written.
     @ObservationIgnored var replying: String?
     /// Taps whose reply only appears if tilde actually says something (welcome-backs).
@@ -93,6 +78,7 @@ public final class Conductor {
         memory = try Memory(home: home, projects: projects)
         log = TaskLog(notebook: memory.notebook)
         threads = ThreadStore(home: home)
+        transcriptStore = TranscriptStore(folder: home.state.appending(path: "jobs"))
         initiativeEnabled = config.initiative
         (signals, signal) = AsyncStream<Signal>.makeStream(bufferingPolicy: .unbounded)
         manager = Manager(memory: memory, tools: makeTools(), config: config.manager)
@@ -100,7 +86,7 @@ public final class Conductor {
         dreamer = Dreamer(memory: memory, home: home, model: config.dream) { [home, projects, notebook = memory.notebook] day in
             await Evidence.gather(day: day, home: home, notebook: notebook, projects: projects)
         }
-        initiative = Initiative(home: home, projects: projects, review: config.review)
+        initiative = Initiative(home: home, review: config.review)
     }
 
     public func start() async throws {
