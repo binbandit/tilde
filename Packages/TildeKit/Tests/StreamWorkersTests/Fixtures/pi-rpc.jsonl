@@ -1,0 +1,17 @@
+{"id":"t-1","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_start","message":{"role":"user","content":"Add hello.txt and commit it.","timestamp":1760000000000}}
+{"type":"message_end","message":{"role":"user","content":"Add hello.txt and commit it.","timestamp":1760000000000}}
+{"type":"message_update","usage":{"input":100,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":101,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"On it"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"On it."},{"type":"toolCall","id":"call_1","name":"write","arguments":{"path":"hello.txt","content":"hi\n"}}],"stopReason":"toolUse","timestamp":1760000000100}}
+{"type":"tool_execution_start","toolCallId":"call_1","toolName":"write","args":{"path":"hello.txt","content":"hi\n"}}
+{"type":"extension_ui_request","id":"9b1d-gate","method":"input","title":"tilde:gate","placeholder":"{\"tool\":\"write\",\"input\":{\"path\":\"hello.txt\",\"content\":\"hi\\n\"}}"}
+{"type":"tool_execution_end","toolCallId":"call_1","toolName":"write","result":{"content":[{"type":"text","text":"Wrote hello.txt"}],"details":{}},"isError":false,"durationMs":3}
+{"type":"auto_retry_start","attempt":1,"maxAttempts":3,"delayMs":2000,"errorMessage":"529 overloaded"}
+{"type":"extension_ui_request","id":"9b1d-confirm","method":"confirm","title":"Run the formatter?","message":"It rewrites every file."}
+{"type":"extension_ui_request","id":"9b1d-status","method":"setStatus","statusKey":"fmt","statusText":"Formatting"}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Added hello.txt and committed it."}],"stopReason":"stop","timestamp":1760000000200}}
+{"type":"agent_end","messages":[],"willRetry":false}
+{"type":"agent_settled","aborted":false}
+{"id":"t-2","type":"response","command":"prompt","success":false,"error":"Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry."}

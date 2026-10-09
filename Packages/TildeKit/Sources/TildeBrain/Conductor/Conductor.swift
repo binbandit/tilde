@@ -1,0 +1,159 @@
+import Foundation
+import Observation
+import TildeMemory
+import TildeSupport
+import TildeWork
+import WorkerKit
+
+/// The hub: owns jobs, workers and open questions, routes worker events to the
+/// manager, carries out the manager's tool calls, and publishes state for the UI.
+///
+/// This file holds its state and lifecycle. The rest is split by responsibility:
+/// talking with the owner (`+Conversation`), running workers (`+Workers`), review
+/// actions (`+Review`), speaking up unprompted (`+Initiative`), the memory passes
+/// (`+Memory`), state on disk (`+Persistence`), and the manager's tools (`Tools/`).
+@MainActor @Observable
+public final class Conductor {
+    /// A reply in progress, shown as a caption by the cursor.
+    public struct Caption: Sendable, Equatable {
+        public var tapID: String
+        public var said: String
+        public var text: String
+        public var done: Bool
+        public var noted: [String]
+
+        public init(tapID: String, said: String, text: String, done: Bool, noted: [String]) {
+            self.tapID = tapID
+            self.said = said
+            self.text = text
+            self.done = done
+            self.noted = noted
+        }
+    }
+
+    /// Things the app turns into notifications, sounds, or surfaces.
+    public enum Signal: Sendable {
+        case asked(Attention)
+        case resolved(attentionID: String)
+        case said(String, jobID: String?)
+        case noted([Memory.Written])
+        case jobChanged(Job)
+        case trouble(String)
+    }
+
+    /// Today's conversation with tilde, oldest first.
+    public internal(set) var thread: [Message] = []
+    public internal(set) var jobs: [Job] = []
+    public internal(set) var attention: [Attention] = []
+    public internal(set) var caption: Caption?
+    public internal(set) var trouble: String?
+
+    @ObservationIgnored public let signals: AsyncStream<Signal>
+    @ObservationIgnored let signal: AsyncStream<Signal>.Continuation
+    @ObservationIgnored public let home: TildeHome
+    @ObservationIgnored public let memory: Memory
+    @ObservationIgnored public let projects: ProjectIndex
+    @ObservationIgnored var manager: Manager!
+    @ObservationIgnored var scribe: Scribe!
+    @ObservationIgnored var dreamer: Dreamer!
+    @ObservationIgnored var initiative: Initiative!
+    /// The app sets this while the Inlet is open, so held news can be told.
+    @ObservationIgnored public var looking = false
+    @ObservationIgnored public weak var perception: (any Perception)?
+    @ObservationIgnored var workers: [String: any Worker] = [:]
+    /// Open worker requests: request id -> (job id, what was asked).
+    @ObservationIgnored var requests: [String: (job: String, request: WorkerRequest)] = [:]
+    @ObservationIgnored let log: TaskLog
+    @ObservationIgnored let threads: ThreadStore
+    /// The tilde message a tap's reply is being written into, while it's being written.
+    @ObservationIgnored var replying: String?
+    /// Taps whose reply only appears if tilde actually says something (welcome-backs).
+    @ObservationIgnored var quietTaps: Set<String> = []
+    @ObservationIgnored private let initiativeEnabled: Bool
+
+    public struct Config: Sendable {
+        public var manager = Manager.Config()
+        /// The model behind the scribe, which files lasting facts after each exchange.
+        public var scribe = CodexMemoryModel(effort: "low")
+        /// The model behind the dream and the first meeting.
+        public var dream = CodexMemoryModel(effort: "medium")
+        /// Watch PRs, agents and jobs, and speak up when it matters.
+        public var initiative = true
+        public var projectRoots = ProjectIndex.defaultRoots
+        public init() {}
+    }
+
+    public init(home: TildeHome = .default, config: Config = Config()) throws {
+        self.home = home
+        projects = ProjectIndex(roots: config.projectRoots)
+        memory = try Memory(home: home, projects: projects)
+        log = TaskLog(notebook: memory.notebook)
+        threads = ThreadStore(home: home)
+        initiativeEnabled = config.initiative
+        (signals, signal) = AsyncStream<Signal>.makeStream(bufferingPolicy: .unbounded)
+        manager = Manager(memory: memory, tools: makeTools(), config: config.manager)
+        scribe = Scribe(memory: memory, model: config.scribe)
+        dreamer = Dreamer(memory: memory, home: home, model: config.dream) { [home, projects, notebook = memory.notebook] day in
+            await Evidence.gather(day: day, home: home, notebook: notebook, projects: projects)
+        }
+        initiative = Initiative(home: home, projects: projects)
+    }
+
+    public func start() async throws {
+        try await memory.prepare()
+        restore()
+        thread = threads.load()
+        Task { await manager.warm() }
+        Task { await dreamer.catchUp() }
+        if initiativeEnabled { Task { await watch() } }
+        Task { [weak self] in
+            guard let outputs = self?.manager.outputs else { return }
+            for await output in outputs { self?.handle(output) }
+        }
+        Task { [weak self] in
+            guard let noted = self?.scribe.noted else { return }
+            for await written in noted { self?.noteWritten(written) }
+        }
+    }
+
+    // MARK: State
+
+    func job(_ id: String) -> Job? { jobs.first { $0.id == id } }
+
+    func update(_ jobID: String, _ change: (inout Job) -> Void) {
+        guard let index = jobs.firstIndex(where: { $0.id == jobID }) else { return }
+        change(&jobs[index])
+        jobs[index].updatedAt = .now
+        signal.yield(.jobChanged(jobs[index]))
+        persist()
+    }
+
+    func addJob(_ job: Job) {
+        jobs.append(job)
+        persist()
+    }
+
+    /// Puts a question to the owner.
+    func raise(_ item: Attention) {
+        attention.append(item)
+        append(Message(from: .tilde, text: item.question, jobs: item.jobID.map { [$0] } ?? [], attentionID: item.id))
+        if let jobID = item.jobID { update(jobID) { $0.phase = .needsYou } }
+        signal.yield(.asked(item))
+        persist()
+    }
+
+    func dropAttention(for jobID: String) {
+        for item in attention where item.jobID == jobID { signal.yield(.resolved(attentionID: item.id)) }
+        attention.removeAll { $0.jobID == jobID }
+    }
+
+    func emit(_ s: Signal) {
+        if case .said(let text, let jobID) = s { append(Message(from: .tilde, text: text, jobs: jobID.map { [$0] } ?? [])) }
+        signal.yield(s)
+    }
+
+    /// Makes text safe inside a double-quoted attribute of the manager's tags.
+    nonisolated static func escape(_ text: String) -> String {
+        text.replacingOccurrences(of: "\"", with: "'").replacingOccurrences(of: "\n", with: " ")
+    }
+}

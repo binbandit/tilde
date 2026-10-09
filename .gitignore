@@ -1,0 +1,10 @@
+.DS_Store
+*.xcodeproj/
+build/
+DerivedData/
+.build/
+.swiftpm/
+Packages/TildeKit/.build/
+xcuserdata/
+__pycache__/
+*.pyc
