@@ -21,9 +21,7 @@ struct CrewStrip: View {
             HStack(alignment: .center, spacing: 10) {
                 HStack(spacing: 6) {
                     ForEach(crew.prefix(16)) { job in
-                        Circle()
-                            .fill(Theme.tint(job.phase))
-                            .frame(width: 8, height: 8)
+                        StatusDot(phase: job.phase)
                             .padding(3)
                             .background(Circle().fill(hovered == job.id ? Theme.raised : .clear))
                             .contentShape(.circle)

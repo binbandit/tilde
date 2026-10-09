@@ -49,11 +49,9 @@ struct TildeWords: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
+            // tilde's own mark (in the peek or the header) shows it's thinking; the line just waits.
             if message.streaming, message.text.isEmpty {
-                HStack(spacing: 8) {
-                    TildeMark(mood: .thinking, size: 16)
-                    Text("On it…").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.text2)
-                }
+                Text("On it…").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.text2)
             } else {
                 Text(.init(message.text))
                     .font(.system(size: 14, weight: message.attentionID == nil ? .regular : .medium))

@@ -19,6 +19,11 @@ final class MacPerception: Perception {
     private var current: Span?
     private var timer: Timer?
     private let logURL = TildeHome.default.state.appending(path: "activity.jsonl")
+    private let calendar: Schedule
+
+    init(schedule: Schedule) {
+        calendar = schedule
+    }
 
     func start() {
         load()
@@ -48,6 +53,15 @@ final class MacPerception: Perception {
         let top = totals.filter { $0.value > 60 }.sorted { $0.value > $1.value }.prefix(10)
         guard !top.isEmpty else { return "(no recorded activity)" }
         return top.map { "\($0.key): \(Int($0.value / 60))m" }.joined(separator: "\n")
+    }
+
+    func schedule(hours: Double) async -> String {
+        let events = calendar.upcoming(hours: hours)
+        let reminders = await calendar.remindersDue(days: 1)
+        return [("Calendar", events), ("Reminders due", reminders)]
+            .filter { !$0.1.isEmpty }
+            .map { "\($0.0):\n\($0.1)" }
+            .joined(separator: "\n")
     }
 
     // MARK: Sampling

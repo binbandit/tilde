@@ -144,6 +144,8 @@ final class InletController {
     func send(_ text: String) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return set(.rest) }
         model.send(text, about: exchangeTarget)
+        // "This" belonged to what you just said; the next thing starts fresh.
+        exchangeTarget = nil
         if let reply = model.thread.last, reply.from == .tilde {
             seen.insert(reply.id)
             set(.peek(reply.id))

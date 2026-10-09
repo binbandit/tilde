@@ -10,7 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) lazy var inlet = InletController(model: model, lens: lens)
     private let trigger = TriggerKey()
     private let listener = Listener()
-    private let perception = MacPerception()
+    private lazy var perception = MacPerception(schedule: model.schedule)
     private lazy var notifications = Notifications(model: model, inlet: inlet)
     private let presence = Presence()
     private var lensTracking: Any?

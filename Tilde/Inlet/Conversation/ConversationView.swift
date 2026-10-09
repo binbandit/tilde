@@ -16,7 +16,10 @@ struct ConversationView: View {
             header
             thread
             if !model.jobs.isEmpty { CrewStrip(actions: actions) }
-            Composer(referent: referent, focused: inlet.mode == .compose, actions: actions)
+            // While you're talking, your words are the pending message above.
+            if inlet.mode != .listening {
+                Composer(referent: referent, focused: inlet.mode == .compose, actions: actions)
+            }
         }
     }
 

@@ -95,7 +95,7 @@ private struct ReviewHeader: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 13) {
-            TildeMark(mood: job.phase.mood, size: 24)
+            StatusDot(phase: job.phase, size: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text(job.title).font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.text)
                 Meta(text: [job.projectName, job.branch, job.harness.label, job.elapsed].compactMap { $0 }.joined(separator: " · "))

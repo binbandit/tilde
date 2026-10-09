@@ -16,7 +16,7 @@ struct CrewChip: View {
                 withAnimation(Theme.spring) { inlet.focusedJob = expanded ? nil : job.id }
             } label: {
                 HStack(spacing: 7) {
-                    TildeMark(mood: job.phase.mood, size: 12)
+                    StatusDot(phase: job.phase, size: 7)
                     Text(job.title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
                     Text(job.harness.label).font(.system(size: 11)).foregroundStyle(Theme.text3).lineLimit(1)
                     JobStatus(job: job)
