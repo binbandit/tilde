@@ -11,9 +11,9 @@ struct CompactInlet: View {
         switch (placement.edge, placement.notch) {
         case (.top, let notch?):
             HStack(spacing: 0) {
-                TildeMark(mood: mood, size: 18).frame(width: InletView.wing)
+                TildeMark(mood: mood, size: 18).frame(width: Inlet.wing)
                 Color.clear.frame(width: notch.width)
-                dots.frame(width: InletView.wing)
+                dots.frame(width: Inlet.wing)
             }
         case (.top, nil):
             HStack(spacing: 8) {

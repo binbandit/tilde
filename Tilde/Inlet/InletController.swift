@@ -26,6 +26,11 @@ final class InletController {
     @ObservationIgnored private var panel: SurfacePanel?
     @ObservationIgnored private var settleTask: Task<Void, Never>?
     @ObservationIgnored private var hoverTask: Task<Void, Never>?
+    /// Where resting the pointer is taking the Inlet, once it's rested a moment.
+    @ObservationIgnored private var hoverIntent: Inlet.Mode?
+    /// Keeps the hit area honest while the Inlet is out: the mouse-move monitors don't
+    /// fire for a pointer that's still, or (once tilde has the keyboard) at all.
+    @ObservationIgnored private var pointerTimer: Timer?
     @ObservationIgnored private var monitors: [Any] = []
     @ObservationIgnored private var observers: [Any] = []
     /// tilde's messages already shown, so each peeks out once.
@@ -108,6 +113,7 @@ final class InletController {
             panel?.resignKey()
             NSApp.hide(nil)
         }
+        watchPointer(mode != .rest)
     }
 
     private func resignedKey() {
@@ -193,10 +199,17 @@ final class InletController {
 
     // MARK: Pointer
 
-    /// The Inlet's shape on screen, in Cocoa coordinates.
+    /// For the debug route: where the Inlet is and whether it's taking the mouse.
+    var hitDescription: String {
+        "panel \(panel?.frame ?? .zero) hit \(inletRect) ignoring \(panel?.ignoresMouseEvents ?? true) mouse \(NSEvent.mouseLocation)"
+    }
+
+    /// The shape the Inlet is becoming, on screen in Cocoa coordinates: the same shape the
+    /// view draws (the panel's content fills it, top-left origin), so the two never disagree.
     private var inletRect: CGRect {
         guard let panel else { return .zero }
-        let local = inlet.shapeFrame
+        let look = inlet.look(busy: !model.openJobs.isEmpty || !model.attention.isEmpty)
+        let local = inlet.shape(for: look).body(in: CGRect(origin: .zero, size: panel.frame.size))
         return CGRect(x: panel.frame.minX + local.minX, y: panel.frame.maxY - local.maxY, width: local.width, height: local.height)
     }
 
@@ -209,31 +222,62 @@ final class InletController {
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { handler($0); return $0 } as Any)
     }
 
+    /// While the Inlet is out, checks the pointer a few dozen times a second. At rest, the
+    /// monitors are enough: the pointer is over other apps, which always report it.
+    private func watchPointer(_ on: Bool) {
+        guard on != (pointerTimer != nil) else { return }
+        pointerTimer?.invalidate()
+        pointerTimer = nil
+        guard on else { return }
+        let timer = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pointerMoved() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        pointerTimer = timer
+        pointerMoved()
+    }
+
     private func pointerMoved() {
         guard let panel else { return }
-        if case .job = inlet.mode { return }
         let mouse = NSEvent.mouseLocation
         let rect = inletRect
-        // At rest the target is the sliver plus a band along the very edge.
-        let slop: CGFloat = inlet.mode == .rest ? 10 : 16
-        let hot = rect.insetBy(dx: -slop, dy: -slop).contains(mouse)
-            || (inlet.mode == .rest && inlet.placement.edge.bezelBand(beside: rect).contains(mouse))
-        panel.ignoresMouseEvents = !rect.contains(mouse)
+        let taking = rect.contains(mouse)
+        if panel.ignoresMouseEvents == taking { panel.ignoresMouseEvents = !taking }
+        hover(toward: intent(at: mouse, in: rect))
+    }
 
+    /// What the pointer resting here asks of the Inlet: open it at the edge, put it away
+    /// once it has wandered off. Nil when it should stay as it is.
+    private func intent(at mouse: CGPoint, in rect: CGRect) -> Inlet.Mode? {
+        switch inlet.mode {
+        case .rest, .peek:
+            // At rest the target is the sliver plus a band along the very edge.
+            let slop: CGFloat = inlet.mode == .rest ? 10 : 16
+            let hot = rect.insetBy(dx: -slop, dy: -slop).contains(mouse)
+                || (inlet.mode == .rest && inlet.placement.edge.bezelBand(beside: rect).contains(mouse))
+            return hot ? .open : nil
+        case .open:
+            return pinnedOpen || rect.insetBy(dx: -16, dy: -16).contains(mouse) ? nil : .rest
+        case .compose:
+            let idle = model.draft.isEmpty && panel?.isKeyWindow != true
+            return idle && !rect.insetBy(dx: -16, dy: -16).contains(mouse) ? .rest : nil
+        case .listening, .job:
+            return nil
+        }
+    }
+
+    /// Moves toward `mode` once the pointer has stayed put long enough; a change of
+    /// heart before then calls it off.
+    private func hover(toward mode: Inlet.Mode?) {
+        guard mode != hoverIntent else { return }
         hoverTask?.cancel()
-        guard inlet.mode != .listening else { return }
-        if hot, inlet.mode == .rest || isPeek {
-            hoverTask = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(140))
-                guard !Task.isCancelled else { return }
-                self?.set(.open)
-            }
-        } else if !hot, !pinnedOpen, inlet.mode == .open || (inlet.mode == .compose && model.draft.isEmpty && !panel.isKeyWindow) {
-            hoverTask = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(380))
-                guard !Task.isCancelled else { return }
-                self?.set(.rest)
-            }
+        hoverIntent = mode
+        guard let mode else { return }
+        hoverTask = Task { [weak self] in
+            try? await Task.sleep(for: mode == .open ? .milliseconds(140) : .milliseconds(380))
+            guard !Task.isCancelled, let self else { return }
+            self.hoverIntent = nil
+            self.set(mode)
         }
     }
 

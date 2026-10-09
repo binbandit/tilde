@@ -6,7 +6,7 @@ import SwiftUI
 ///
 /// Because its base is the bezel itself, it can grow, shrink and bounce however it likes
 /// and never come away from the screen's edge.
-nonisolated struct InletShape: Shape {
+nonisolated struct InletShape: Shape, Equatable {
     var edge: InletEdge
     var depth: CGFloat
     var length: CGFloat

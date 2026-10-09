@@ -53,8 +53,8 @@ enum DebugRoutes {
             inlet.simulatesNotch = value("notch") == "1"
             inlet.place()
         case "/frame":
-            // Where the pointer counts as on the Inlet, in the panel's space.
-            Log.info("debug", "inlet \(inlet.inlet.mode) hit frame \(inlet.inlet.shapeFrame)")
+            // Where the pointer counts as on the Inlet, on screen.
+            Log.info("debug", "inlet \(inlet.inlet.mode) \(inlet.hitDescription)")
         case "/hide":
             delegate.lens.hide()
             model.listening = nil
