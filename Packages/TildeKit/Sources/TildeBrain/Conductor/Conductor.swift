@@ -88,6 +88,7 @@ public final class Conductor {
 
     public init(home: TildeHome = .default, config: Config = Config()) throws {
         self.home = home
+        Log.use(home)
         projects = ProjectIndex(roots: config.projectRoots)
         memory = try Memory(home: home, projects: projects)
         log = TaskLog(notebook: memory.notebook)
