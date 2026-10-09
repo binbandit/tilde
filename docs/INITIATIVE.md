@@ -17,7 +17,7 @@ A good EA doesn't wait to be asked. They know your goals and your day, notice wh
 
 - **Calendar and Reminders**: EventKit, from the app. Today's and the next few hours' events with attendees and notes, and reminders due.
 - **GitHub**: through your `gh` login. Your PRs, review requests, notifications, CI on default branches.
-- **Connected apps**: the MCP servers you already configured for Codex (Linear, docs, Slack, ...). The review pass may call only read-only tools: names that get/list/search/read/query/fetch, or tools annotated read-only.
+- **Connected apps**: the connectors on your ChatGPT account (GitHub, Gmail, Google Calendar, Linear, ...) and the MCP servers you configured for Codex. The review pass may call only read-only tools: names that get/list/search/read/query/fetch, or tools annotated read-only.
 - **Your agents**: Claude Code and Codex sessions on this Mac, inside tilde or not.
 - **Your focus**: which apps, windows and repos your time went to. Titles and paths only.
 - **The notebook**: goals, rules, project notes, recent journal, open tasks.
@@ -48,7 +48,8 @@ goals, follow-ups, routines (due) ───────────────�
   - when you return after 15 minutes or more
   - every 90 minutes or so while you're active but not typing
 - **How:** a separate ephemeral Codex thread in a read-only sandbox, with your MCP connectors and only read-only tool calls allowed. One at a time, stopped after 4 minutes.
-  - `approvalPolicy: never` alone isn't read-only: Codex runs any tool `config.toml` pre-approves (`approval_mode = "approve"`) without asking. So nothing may escalate except connector tool prompts, every configured server and app is put in `writes` mode for the thread (tools annotated read-only run; every other call prompts), and tilde answers each prompt itself: allowed only when the tool's name reads as a read (starts with get, list, search, read, query, fetch or view, and has no write verb in it). Connectors whose names can't be fenced this way aren't loaded at all.
+  - `approvalPolicy: never` alone isn't read-only: Codex runs any tool `config.toml` pre-approves (`approval_mode = "approve"`) without asking. So nothing may escalate except connector tool prompts; every app (`apps._default`, which covers the account's connectors, plus each configured one) and every configured server is put in `writes` mode for the thread (tools annotated read-only run; every other call prompts); and tilde answers each prompt itself: allowed only when the tool's name reads as a read (starts with get, list, search, read, query, fetch or view, and has no write verb in it; `gmail.search_emails` is judged by `search_emails`).
+  - Plugins aren't loaded at all (`features.plugins=false`): their servers, like computer use and the browser, act rather than read. Nor are your Codex hooks.
 - **It gets:**
   - goals with their status
   - open loops: unanswered questions, unlanded work, stale branches, follow-ups due soon

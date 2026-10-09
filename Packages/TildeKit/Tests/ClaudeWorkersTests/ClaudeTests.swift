@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import TildeSupport
 import WorkerKit
@@ -18,6 +19,15 @@ import WorkerKit
         #expect(launch.arguments.contains("--resume") && !launch.arguments.contains("--session-id"))
     }
 
+    @Test func workersAreSandboxedToTheirJob() {
+        let sandbox = ClaudeSandbox.settings(writable: ["/repo/.git"])["sandbox"]
+        #expect(sandbox?["enabled"] == true)
+        #expect(sandbox?["filesystem"]?["allowWrite"]?.array?.first == "/repo/.git")
+        #expect(sandbox?["network"]?["allowedDomains"]?.array?.contains("registry.npmjs.org") == true)
+        #expect(ClaudeSandbox.newHosts(["command": "curl x", "allowed_domains": ["example.com"]]) == ["example.com"])
+        #expect(ClaudeSandbox.newHosts(["command": "swift test"]) == nil)
+    }
+
     @Test func askUserQuestionAnswersMatchOptionLabels() {
         let input: JSON = ["questions": [["question": "Sticky?", "header": "Nav", "options": [["label": "Sticky"], ["label": "Scroll away"]]]]]
         let questions = [WorkerQuestion(question: "Sticky?", options: ["Sticky", "Scroll away"], multiSelect: false)]
@@ -26,5 +36,42 @@ import WorkerKit
         #expect(answered["questions"] != nil)
         let free = ClaudeWorker.answering(input, questions: questions, with: "Only on mobile")
         #expect(free["answers"]?["Sticky?"] == "Only on mobile")
+    }
+}
+
+@Suite struct ClaudeSessionTests {
+    /// Stands in for `claude` with the fixture script.
+    private func fakeClaude() throws -> String {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "Fixtures/fake_claude.py").path
+        let path = FileManager.default.temporaryDirectory.appending(path: "fake-claude-\(UUID().uuidString)").path
+        try "#!/bin/sh\nexec /usr/bin/python3 -I '\(fixture)'\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        return path
+    }
+
+    private struct NoHost: ClaudeHost {
+        func canUseTool(_ request: ClaudePermissionRequest) async -> ClaudePermissionDecision { .deny("No.") }
+    }
+
+    @Test func aTurnEndsOnItsOwnResultNotAStartupCommands() async throws {
+        var launch = ClaudeLaunch(cwd: FileManager.default.temporaryDirectory.path)
+        launch.executable = try fakeClaude()
+        let session = ClaudeSession(launch, host: NoHost())
+        try await session.start()
+        try await session.send("Add a CONTRIBUTING.md")
+
+        var said: [String] = []
+        for await event in session.events {
+            switch event {
+            case .text(let text): said.append(text)
+            case .turnDone(let turn):
+                #expect(turn.text == "done")
+                #expect(said == ["done"])
+                await session.stop()
+                return
+            default: continue
+            }
+        }
+        Issue.record("The session ended without finishing the turn")
     }
 }

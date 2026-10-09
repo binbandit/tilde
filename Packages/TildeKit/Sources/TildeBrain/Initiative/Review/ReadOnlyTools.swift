@@ -6,7 +6,8 @@ import TildeSupport
 /// (a Linear `save_issue` set to `approve`, say) without asking. So the review's thread switches
 /// every connector to `writes` mode, where only tools annotated read-only run unasked and every
 /// other call comes to tilde as a prompt, and `allows` answers each prompt by the tool's name.
-/// Nothing else (commands, sandbox, permissions) can escalate at all.
+/// Nothing else (commands, sandbox, permissions) can escalate at all, and plugins, whose servers
+/// (computer use, the browser) act rather than read, aren't loaded (`CodexSession.ownProcess`).
 enum ReadOnlyTools {
     /// Escalate nothing but connector tool prompts.
     static let approvalPolicy: JSON = [
@@ -28,8 +29,9 @@ enum ReadOnlyTools {
     ]
 
     /// Whether a connector tool reads like a read: it starts with a reading verb and says nothing about changing anything.
+    /// Account connectors namespace their tools (`gmail.search_emails`); the verb follows the last dot.
     static func allows(_ tool: String) -> Bool {
-        let words = words(of: tool)
+        let words = words(of: tool.split(separator: ".").last.map(String.init) ?? "")
         guard let verb = words.first, reads.contains(verb) else { return false }
         return !words.contains(where: changes.contains)
     }
@@ -54,26 +56,22 @@ enum ReadOnlyTools {
         return words.map { $0.lowercased() }
     }
 
-    /// Thread config that puts every configured MCP server and app (and each tool config.toml
-    /// pre-approves) in `writes` mode. Nil when a name can't be written as a dotted config key;
-    /// the review then runs without connectors rather than with unfenced ones.
-    static func fence(_ config: JSON) -> [String: JSON]? {
-        var fence: [String: JSON] = [:]
-        for table in ["mcp_servers", "apps"] {
-            for (name, entry) in config[table]?.object ?? [:] {
-                guard isBareKey(name) else { return nil }
-                fence["\(table).\(name).default_tools_approval_mode"] = "writes"
-                if table == "apps" { fence["apps.\(name).destructive_enabled"] = false }
-                for tool in (entry["tools"]?.object ?? [:]).keys {
-                    guard isBareKey(tool) else { return nil }
-                    fence["\(table).\(name).tools.\(tool).approval_mode"] = "writes"
-                }
-            }
+    /// Thread config that puts every app (the account's connectors: GitHub, Gmail, Calendar, ...)
+    /// and every configured MCP server, and each tool config.toml pre-approves, in `writes` mode.
+    /// Nested objects, not dotted keys, so any server name works; Codex merges them into config.
+    static func fence(_ config: JSON) -> JSON {
+        let app: [String: JSON] = ["default_tools_approval_mode": "writes", "destructive_enabled": false]
+        var apps: [String: JSON] = ["_default": .object(app)]
+        for (name, entry) in config["apps"]?.object ?? [:] { apps[name] = .object(app.merging(tools(entry)) { $1 }) }
+        let servers = (config["mcp_servers"]?.object ?? [:]).mapValues { entry in
+            JSON.object(["default_tools_approval_mode": "writes"].merging(tools(entry)) { $1 })
         }
-        return fence
+        return ["apps": .object(apps), "mcp_servers": .object(servers)]
     }
 
-    private static func isBareKey(_ key: String) -> Bool {
-        !key.isEmpty && key.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
+    /// Each tool config.toml names (to pre-approve it, say), put back in `writes` mode.
+    private static func tools(_ entry: JSON) -> [String: JSON] {
+        guard let tools = entry["tools"]?.object, !tools.isEmpty else { return [:] }
+        return ["tools": .object(tools.mapValues { _ in ["approval_mode": "writes"] })]
     }
 }

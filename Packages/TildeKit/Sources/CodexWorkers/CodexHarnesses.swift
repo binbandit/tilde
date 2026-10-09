@@ -12,7 +12,7 @@ public enum CodexHarnesses {
             resumeCommand: { "codex resume \($0)" }
         ) { launch in
             CodexWorker(workdir: launch.workdir, threadID: launch.resume ? launch.sessionID : nil, model: launch.model,
-                        instructions: launch.instructions)
+                        instructions: launch.instructions, writable: launch.writable)
         },
         HarnessSpec(
             id: computerUse, label: "Codex Computer Use", executable: "codex",
@@ -21,7 +21,8 @@ public enum CodexHarnesses {
         ) { launch in
             CodexWorker(
                 workdir: launch.workdir, threadID: launch.resume ? launch.sessionID : nil, model: launch.model,
-                instructions: launch.instructions + "\n\n" + ComputerUse.brief, config: ComputerUse.config)
+                instructions: launch.instructions + "\n\n" + ComputerUse.brief, config: ComputerUse.config,
+                writable: launch.writable)
         },
     ]
 }

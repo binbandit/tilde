@@ -53,13 +53,15 @@ import TildeWork
     @Test func onlyToolsThatReadLikeReadsAreAllowed() {
         for tool in [
             "list_issues", "get_issue", "search_documentation", "fetch", "read_file", "query_database", "view_page", "getIssue",
-            "List issues", "get-diff", "get_commit", "list_comments", "get_workflow_run", "get_app_state",
+            "List issues", "get-diff", "get_commit", "list_comments", "get_workflow_run", "get_app_state", "gmail.search_emails",
+            "google_calendar.list_events",
         ] {
             #expect(ReadOnlyTools.allows(tool), "\(tool)")
         }
         for tool in [
             "save_issue", "create_comment", "delete_event", "update_project", "send_message", "merge_diff", "mark_notification",
             "get_or_create_label", "list_and_archive", "fetchAndUpdate", "click", "js", "extract_images", "mcp__linear__list_issues", "",
+            "gmail.send_email", "get.delete_event", "sites.create_site",
         ] {
             #expect(!ReadOnlyTools.allows(tool), "\(tool)")
         }
@@ -68,23 +70,24 @@ import TildeWork
     @Test func everyConnectorAndPreApprovedToolIsFenced() {
         let config: JSON = [
             "mcp_servers": [
-                "linear": ["enabled": false, "tools": ["save_issue": ["approval_mode": "approve"], "save_comment": ["approval_mode": "approve"]]],
-                "computer-use": ["enabled": true],
+                "linear": ["enabled": false, "tools": ["save_issue": ["approval_mode": "approve"]]],
+                "my server": ["enabled": true],
             ],
-            "apps": ["github": ["enabled": true]],
+            "apps": ["github": ["enabled": true, "tools": ["create_pull_request": ["approval_mode": "approve"]]]],
         ]
+        let writes: JSON = ["approval_mode": "writes"]
         #expect(ReadOnlyTools.fence(config) == [
-            "mcp_servers.linear.default_tools_approval_mode": "writes",
-            "mcp_servers.linear.tools.save_issue.approval_mode": "writes",
-            "mcp_servers.linear.tools.save_comment.approval_mode": "writes",
-            "mcp_servers.computer-use.default_tools_approval_mode": "writes",
-            "apps.github.default_tools_approval_mode": "writes",
-            "apps.github.destructive_enabled": false,
+            "apps": [
+                "_default": ["default_tools_approval_mode": "writes", "destructive_enabled": false],
+                "github": ["default_tools_approval_mode": "writes", "destructive_enabled": false, "tools": ["create_pull_request": writes]],
+            ],
+            "mcp_servers": [
+                "linear": ["default_tools_approval_mode": "writes", "tools": ["save_issue": writes]],
+                "my server": ["default_tools_approval_mode": "writes"],
+            ],
         ])
-        #expect(ReadOnlyTools.fence([:]) == [:])
-        // A name that can't be a dotted key can't be fenced: the review goes without connectors.
-        #expect(ReadOnlyTools.fence(["mcp_servers": ["my server": [:]]]) == nil)
-        #expect(ReadOnlyTools.fence(["mcp_servers": ["ok": ["tools": ["weird.tool": [:]]]]]) == nil)
+        // Connectors that come with the account, not config.toml, are fenced too.
+        #expect(ReadOnlyTools.fence([:])["apps"]?["_default"]?["default_tools_approval_mode"] == "writes")
     }
 
     // MARK: Running it
@@ -94,7 +97,7 @@ import TildeWork
         try home.prepare()
         let gate = Gate()
         let reply = #"{"notices": [{"key": "k", "urgency": "soon", "summary": "S.", "suggestion": null, "url": null, "project": null}]}"#
-        let initiative = Initiative(home: home, projects: ProjectIndex(roots: []), review: GatedModel(gate: gate, reply: reply))
+        let initiative = Initiative(home: home, review: GatedModel(gate: gate, reply: reply))
         #expect(await initiative.reviewDue())
 
         let first = Task { await initiative.review(Review.Inputs()) }
@@ -112,7 +115,7 @@ import TildeWork
         let home = TildeHome(root: FileManager.default.temporaryDirectory.appending(path: "tilde-review-\(UUID().uuidString)"))
         try home.prepare()
         let reply = #"{"notices": [{"key": "k", "urgency": "fyi", "summary": "S.", "suggestion": null, "url": null, "project": null}]}"#
-        let initiative = Initiative(home: home, projects: ProjectIndex(roots: []), review: CannedModel(reply: reply))
+        let initiative = Initiative(home: home, review: CannedModel(reply: reply))
         let found = try #require(await initiative.review(Review.Inputs()))
         #expect(await initiative.due(found, typing: false, looking: false).isEmpty)  // fyi waits for a look
         #expect(await initiative.due([], typing: false, looking: true).map(\.key) == ["review:k"])

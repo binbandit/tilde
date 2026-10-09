@@ -26,6 +26,12 @@ import TildeSupport
         #expect(bash(command) == nil)
     }
 
+    @Test func leavingTheSandboxHitsARail() {
+        let input: JSON = ["command": "touch ~/.claude/settings.json", "dangerouslyDisableSandbox": true]
+        #expect(Rails.check(tool: "Bash", input: input, workdir: workdir) != nil)
+        #expect(Rails.check(tool: "Bash", input: ["command": "swift test", "dangerouslyDisableSandbox": false], workdir: workdir) == nil)
+    }
+
     @Test func writesOutsideTheWorktreeHitRails() {
         #expect(Rails.check(tool: "Write", input: ["file_path": "/tmp/tilde-rails/elsewhere/a.swift"], workdir: workdir) != nil)
         #expect(Rails.check(tool: "Edit", input: ["file_path": "/tmp/tilde-rails/work/Sources/a.swift"], workdir: workdir) == nil)

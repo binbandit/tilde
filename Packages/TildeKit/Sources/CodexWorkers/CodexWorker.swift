@@ -15,18 +15,21 @@ public actor CodexWorker: Worker, CodexHost {
     private let instructions: String
     /// Extra thread config (computer-use app access, features).
     private let config: JSON?
+    /// Directories outside the worktree its sandbox may write to (the repo's git directory).
+    private let writable: [String]
     private var session: CodexSession?
     private var waiting: [String: CheckedContinuation<WorkerAnswer, Never>] = [:]
     private var lastMessage = ""
 
     public init(
         workdir: String, threadID: String? = nil, model: String? = nil,
-        instructions: String = Supervision.brief(owner: Owner.firstName), config: JSON? = nil,
+        instructions: String = Supervision.brief(owner: Owner.firstName), config: JSON? = nil, writable: [String] = [],
         executable: String = "codex"
     ) {
         self.workdir = workdir
         self.instructions = instructions
         self.config = config
+        self.writable = writable
         self.threadID = threadID
         self.model = model
         self.executable = executable
@@ -43,7 +46,11 @@ public actor CodexWorker: Worker, CodexHost {
             "developerInstructions": .string(instructions),
         ]
         if let model { params["model"] = .string(model) }
-        if let config { params["config"] = config }
+        var config = config?.object ?? [:]
+        if !writable.isEmpty {
+            config["sandbox_workspace_write"] = ["writable_roots": .array(writable.map { .string($0) })]
+        }
+        if !config.isEmpty { params["config"] = .object(config) }
         let id = if let threadID { try await session.resumeThread(threadID, .object(params)) } else {
             try await session.startThread(.object(params))
         }

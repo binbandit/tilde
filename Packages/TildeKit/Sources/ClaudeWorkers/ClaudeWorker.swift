@@ -3,8 +3,9 @@ import TildeSupport
 import WorkerKit
 
 /// A Claude Code worker: the user's own `claude`, with their CLAUDE.md, skills
-/// and MCP servers, running in auto mode inside the job's worktree. tilde's
-/// rails hook turns anything outward-facing into an explicit request.
+/// and MCP servers, running in auto mode inside the job's worktree, its shell
+/// commands sandboxed to it (`ClaudeSandbox`). tilde's rails hook turns anything
+/// outward-facing into an explicit request.
 public actor ClaudeWorker: Worker, ClaudeHost {
     public nonisolated let events: AsyncStream<WorkerEvent>
     private let emit: AsyncStream<WorkerEvent>.Continuation
@@ -15,7 +16,7 @@ public actor ClaudeWorker: Worker, ClaudeHost {
 
     public init(
         workdir: String, sessionID: String, resume: Bool = false, model: String? = nil,
-        instructions: String = Supervision.brief(owner: Owner.firstName), executable: String = "claude"
+        instructions: String = Supervision.brief(owner: Owner.firstName), writable: [String] = [], executable: String = "claude"
     ) {
         self.workdir = workdir
         var launch = ClaudeLaunch(cwd: workdir, sessionID: sessionID)
@@ -25,6 +26,7 @@ public actor ClaudeWorker: Worker, ClaudeHost {
         launch.permissionMode = "auto"
         launch.appendSystemPrompt = instructions
         launch.preToolUseHook = true
+        launch.settings = ClaudeSandbox.settings(writable: writable)
         self.launch = launch
         (events, emit) = AsyncStream<WorkerEvent>.makeStream(bufferingPolicy: .unbounded)
     }
@@ -60,7 +62,9 @@ public actor ClaudeWorker: Worker, ClaudeHost {
     // MARK: ClaudeHost
 
     public func preToolUse(tool: String, input: JSON) async -> ClaudeHookDecision {
-        Rails.check(tool: tool, input: input, workdir: workdir).map { .ask(reason: "tilde rail: \($0)") } ?? .proceed
+        if let rail = Rails.check(tool: tool, input: input, workdir: workdir) { return .ask(reason: "tilde rail: \(rail)") }
+        if let hosts = ClaudeSandbox.newHosts(input) { return .ask(reason: "Opens the sandbox to \(hosts.joined(separator: ", "))") }
+        return .proceed
     }
 
     public func canUseTool(_ request: ClaudePermissionRequest) async -> ClaudePermissionDecision {
@@ -80,8 +84,11 @@ public actor ClaudeWorker: Worker, ClaudeHost {
         }
 
         let rail = Rails.check(tool: request.toolName, input: request.input, workdir: workdir)
-        let action = Activity.action(tool: request.toolName, input: request.input)
-        switch await ask(.permission(tool: request.toolName, action: action, rail: rail ?? request.reason)) {
+        var action = Activity.action(tool: request.toolName, input: request.input)
+        // Reaching another host is tilde's call, not a rail for the owner.
+        let hosts = rail == nil ? ClaudeSandbox.newHosts(request.input) : nil
+        if let hosts { action += "\n(needs the sandbox opened to \(hosts.joined(separator: ", ")))" }
+        switch await ask(.permission(tool: request.toolName, action: action, rail: hosts == nil ? rail ?? request.reason : nil)) {
         case .allow: return .allow(request.input)
         case .deny(let reason): return .deny(reason)
         case .reply(let text): return .deny(text)

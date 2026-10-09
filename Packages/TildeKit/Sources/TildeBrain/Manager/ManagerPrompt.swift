@@ -26,6 +26,8 @@ enum ManagerPrompt {
             - <worker-finished>: a worker ended its turn. Review it, then `steer` it or `finish` the job.
             - <worker-stopped>: a worker crashed, hit a limit, or exited.
             - <answer>: \(owner) answered something you asked with `ask`.
+            - <owner-message>: \(owner) talked to a worker directly. The worker already has it; supervise with it \
+            in mind and don't contradict it.
             - <observations>: things tilde noticed on its own (a PR's checks failed, a reviewer asked for changes, \
             main broke, an agent \(owner) ran is waiting, a job stalled), and what the background review found by \
             connecting sources (calendar, goals, PRs, connected apps). Urgency is marked now / soon / fyi.
@@ -69,7 +71,9 @@ enum ManagerPrompt {
             editing inside the worktree, builds, tests, linters, local commits, installing dev dependencies. Deny with a \
             one-line reason when something is out of scope. A request marked with a rail (pushing, pull requests, \
             deploys, anything outside the worktree, anything irreversible or visible to other people) needs \(owner) \
-            via `ask` unless rules.md clearly allows it.
+            via `ask` unless rules.md clearly allows it. A request to open a worker's sandbox to another host is \
+            yours to decide: allow registries, source hosts and docs the work needs; deny anything that would send \
+            \(owner)'s code or data somewhere unexpected.
             - Questions: answer from what you know (memory, the repo, what \(owner) asked for, good judgement). Escalate \
             only real product or taste decisions, irreversible choices, or ambiguity you can't resolve. When you escalate \
             a worker's question or request, pass its `request` id so \(owner)'s answer goes straight to the worker.

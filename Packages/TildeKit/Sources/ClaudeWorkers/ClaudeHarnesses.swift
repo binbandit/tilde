@@ -13,7 +13,7 @@ public enum ClaudeHarnesses {
         ) { launch in
             ClaudeWorker(
                 workdir: launch.workdir, sessionID: launch.sessionID ?? UUID().uuidString.lowercased(), resume: launch.resume,
-                model: launch.model, instructions: launch.instructions)
+                model: launch.model, instructions: launch.instructions, writable: launch.writable)
         },
     ]
 }

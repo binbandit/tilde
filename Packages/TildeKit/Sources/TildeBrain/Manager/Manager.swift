@@ -9,7 +9,7 @@ import WorkerKit
 ///
 /// Messages are handled one turn at a time. Whatever arrives while a turn runs
 /// is batched into the next, so every turn knows whether a <tap> started it,
-/// and therefore whether its words go to a caption or stay private.
+/// and therefore whether its words are a reply in the thread or stay private.
 public actor Manager: CodexHost {
     public struct Config: Sendable {
         public var model = "gpt-6.1-sol"
@@ -19,7 +19,7 @@ public actor Manager: CodexHost {
     }
 
     public enum Output: Sendable {
-        /// Streaming caption text for the taps that started this turn.
+        /// Streaming reply text for the taps that started this turn.
         case reply(taps: [String], text: String)
         case replyDone(taps: [String], text: String)
         case trouble(String)
@@ -27,7 +27,7 @@ public actor Manager: CodexHost {
 
     public struct Message: Sendable {
         public var text: String
-        /// Set when Brayden said it; the turn's reply goes to that tap's caption.
+        /// Set when Brayden said it; the turn's reply goes to that tap's message.
         public var tap: String?
         /// Paths and jobs the message concerns, to pull the right notes into the briefing.
         public var paths: [String]
@@ -47,8 +47,11 @@ public actor Manager: CodexHost {
     private let tools: Toolset
     private let config: Config
 
+    /// The day's thread, once it's ready for turns.
     private var session: CodexSession?
     private var sessionDay: String?
+    /// The thread being opened; everyone who needs it meanwhile waits for this one.
+    private var opening: Task<CodexSession, any Error>?
     private var inbox: [Message] = []
     /// Taps in the running turn; nil when idle.
     private var turn: [String]?
@@ -135,28 +138,47 @@ public actor Manager: CodexHost {
     }
 
     private func ensureSession() async throws -> CodexSession {
+        if let opening { return try await opening.value }
         let day = Date.now.formatted(.iso8601.year().month().day())
-        if let session, await session.isRunning, sessionDay == day { return session }
-        await session?.stop()
+        if let session, sessionDay == day, await session.isRunning { return session }
+        if let opening { return try await opening.value }
 
-        // A fresh, ephemeral thread each day (or after a crash): continuity lives
-        // in the notebook and in tilde's job state, not in an ever-growing context.
-        let session = CodexSession(
-            cwd: memory.notebook.path, host: self, overrides: ["mcp_servers={}"], executable: config.executable)
+        let previous = session
+        session = nil
+        let opening = Task { try await self.open(replacing: previous) }
+        self.opening = opening
+        defer { self.opening = nil }
+        let session = try await opening.value
         self.session = session
         sessionDay = day
+        return session
+    }
+
+    /// A fresh, ephemeral thread each day (or after a crash): continuity lives in the
+    /// notebook and in tilde's job state, not in an ever-growing context.
+    private func open(replacing previous: CodexSession?) async throws -> CodexSession {
+        await previous?.stop()
+        let session = CodexSession(
+            cwd: memory.notebook.path, host: self, overrides: CodexSession.ownProcess(), executable: config.executable)
         Task { await self.relay(session) }
-        try await session.start()
-        try await session.startThread([
-            "cwd": .string(memory.notebook.path),
-            "model": .string(config.model),
-            "approvalPolicy": "never",
-            // Read anything to understand a project; change nothing. Workers change things.
-            "sandbox": "read-only",
-            "baseInstructions": .string(ManagerPrompt.make(owner: Owner.firstName, notebook: memory.notebook.path)),
-            "dynamicTools": tools.codexSpecs,
-            "ephemeral": true,
-        ])
+        do {
+            try await session.start()
+            try await session.startThread([
+                "cwd": .string(memory.notebook.path),
+                "model": .string(config.model),
+                "approvalPolicy": "never",
+                // Read anything to understand a project; change nothing. Workers change things.
+                "sandbox": "read-only",
+                "baseInstructions": .string(ManagerPrompt.make(owner: Owner.firstName, notebook: memory.notebook.path)),
+                "dynamicTools": tools.codexSpecs,
+                // tilde's tools are its only tools: none of the owner's servers run unasked here.
+                "config": try await session.serversOff(),
+                "ephemeral": true,
+            ])
+        } catch {
+            await session.stop()
+            throw error
+        }
         await memory.resetBriefing()
         return session
     }

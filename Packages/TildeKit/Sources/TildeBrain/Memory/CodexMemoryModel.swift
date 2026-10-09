@@ -16,13 +16,13 @@ public struct CodexMemoryModel: MemoryModel {
     }
 
     public func run(_ pass: ModelPass) async throws -> ModelReply {
-        let session = CodexSession(cwd: pass.workdir, host: Unattended(), overrides: ["mcp_servers={}"], executable: executable)
+        let session = CodexSession(cwd: pass.workdir, host: Unattended(), overrides: CodexSession.ownProcess(), executable: executable)
         defer { Task { await session.stop() } }
         try await session.start()
         try await session.startThread([
             "cwd": .string(pass.workdir), "model": .string(model), "approvalPolicy": "never",
             "sandbox": pass.writable ? "workspace-write" : "read-only", "ephemeral": true,
-            "baseInstructions": .string(pass.instructions),
+            "baseInstructions": .string(pass.instructions), "config": try await session.serversOff(),
         ])
         try await session.send(pass.prompt, effort: effort, outputSchema: pass.outputSchema)
         return await session.reply()

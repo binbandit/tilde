@@ -47,7 +47,7 @@ let package = Package(
 
         .testTarget(name: "TildeSupportTests", dependencies: ["TildeSupport"]),
         .testTarget(name: "WorkerKitTests", dependencies: ["WorkerKit", "TildeSupport"]),
-        .testTarget(name: "ClaudeWorkersTests", dependencies: ["ClaudeWorkers", "WorkerKit", "TildeSupport"]),
+        .testTarget(name: "ClaudeWorkersTests", dependencies: ["ClaudeWorkers", "WorkerKit", "TildeSupport"], exclude: ["Fixtures"]),
         .testTarget(name: "CodexWorkersTests", dependencies: ["CodexWorkers", "TildeSupport"], exclude: ["Fixtures"]),
         .testTarget(name: "ACPWorkersTests", dependencies: ["ACPWorkers", "WorkerKit", "TildeSupport"], exclude: ["Fixtures"]),
         .testTarget(name: "StreamWorkersTests", dependencies: ["StreamWorkers", "WorkerKit", "TildeSupport"], exclude: ["Fixtures"]),

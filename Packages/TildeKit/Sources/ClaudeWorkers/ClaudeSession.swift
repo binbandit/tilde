@@ -31,6 +31,13 @@ public actor ClaudeSession {
     private var process: ChildProcess?
     private var pendingControl: [String: CheckedContinuation<JSON, Never>] = [:]
     private var inFlight: [String: Task<Void, Never>] = [:]
+    /// The messages tilde sent, by uuid. Claude runs each as a command; it can also run
+    /// commands of its own (a plugin's at startup, say) that report their own `result`.
+    private var sent: Set<String> = []
+    /// The command Claude says it's running (`command_lifecycle`), if it says.
+    private var running: String?
+    /// Whether what Claude is saying belongs to one of tilde's turns.
+    private var isOurs: Bool { running.map(sent.contains) ?? true }
 
     public init(_ launch: ClaudeLaunch, host: any ClaudeHost) {
         self.launch = launch
@@ -57,8 +64,10 @@ public actor ClaudeSession {
 
     /// Sends a user turn. Claude queues it if a turn is already running.
     public func send(_ text: String) throws {
+        let id = UUID().uuidString.lowercased()
+        sent.insert(id)
         try write([
-            "type": "user", "uuid": .string(UUID().uuidString.lowercased()), "session_id": "",
+            "type": "user", "uuid": .string(id), "session_id": "",
             "message": ["role": "user", "content": .string(text)], "parent_tool_use_id": nil,
         ])
     }
@@ -124,6 +133,13 @@ public actor ClaudeSession {
             }
         case "control_cancel_request":
             if let id = message["request_id"]?.string { inFlight.removeValue(forKey: id)?.cancel() }
+        case "command_lifecycle":
+            let id = message["command_uuid"]?.string
+            switch message["state"]?.string {
+            case "started": running = id
+            case "completed" where running == id: running = nil
+            default: break
+            }
         case "system":
             switch message["subtype"]?.string {
             case "init":
@@ -137,7 +153,7 @@ public actor ClaudeSession {
             default: break
             }
         case "stream_event":
-            guard message["parent_tool_use_id"]?.isNull ?? true else { return }
+            guard isOurs, message["parent_tool_use_id"]?.isNull ?? true else { return }
             let event = message["event"]
             if event?["type"]?.string == "content_block_delta", event?["delta"]?["type"]?.string == "text_delta",
                 let text = event?["delta"]?["text"]?.string
@@ -145,7 +161,7 @@ public actor ClaudeSession {
                 emit.yield(.textDelta(text))
             }
         case "assistant":
-            guard message["parent_tool_use_id"]?.isNull ?? true else { return }
+            guard isOurs, message["parent_tool_use_id"]?.isNull ?? true else { return }
             for block in message["message"]?["content"]?.array ?? [] {
                 switch block["type"]?.string {
                 case "text":
@@ -164,6 +180,7 @@ public actor ClaudeSession {
                     output: Self.flatten(block["content"])))
             }
         case "result":
+            guard isOurs else { return }
             emit.yield(.turnDone(ClaudeTurn(
                 ok: message["subtype"]?.string == "success" && !(message["is_error"]?.bool ?? false),
                 text: message["result"]?.string ?? message["errors"]?.array?.compactMap(\.string).joined(separator: "\n") ?? "",

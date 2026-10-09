@@ -10,6 +10,7 @@ public enum Rails {
     public static func check(tool: String, input: JSON, workdir: String) -> String? {
         switch tool {
         case "Bash":
+            if input["dangerouslyDisableSandbox"]?.bool == true { return "Runs outside the sandbox, where it can change anything on this Mac" }
             return input["command"]?.string.flatMap { command(in: $0, workdir: workdir) }
         case "Write", "Edit", "MultiEdit", "NotebookEdit":
             guard let path = input["file_path"]?.string ?? input["notebook_path"]?.string else { return nil }

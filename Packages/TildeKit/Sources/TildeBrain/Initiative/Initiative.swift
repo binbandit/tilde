@@ -31,7 +31,6 @@ public actor Initiative {
 
     let home: TildeHome
     let notebook: Notebook
-    private let projects: ProjectIndex
     let reviewModel: any MemoryModel
     var seen: Seen
     /// Observations waiting for the right moment.
@@ -45,9 +44,8 @@ public actor Initiative {
     /// One background review at a time.
     var reviewing = false
 
-    public init(home: TildeHome, projects: ProjectIndex, review: any MemoryModel = CodexReviewModel()) {
+    public init(home: TildeHome, review: any MemoryModel = CodexReviewModel()) {
         self.home = home
-        self.projects = projects
         notebook = Notebook(url: home.notebook)
         reviewModel = review
         seen = (try? Data(contentsOf: home.state.appending(path: "initiative.json")))

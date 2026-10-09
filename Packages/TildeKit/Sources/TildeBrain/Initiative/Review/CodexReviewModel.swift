@@ -26,16 +26,9 @@ public struct CodexReviewModel: MemoryModel {
     }
 
     public func run(_ pass: ModelPass) async throws -> ModelReply {
-        var session = try await open(overrides, in: pass.workdir)
-        var fence = (try? await session.readConfig()).flatMap(ReadOnlyTools.fence)
-        if fence == nil {
-            // Connectors that can't be fenced aren't used at all.
-            Log.info("review", "running without connectors: couldn't fence them")
-            await session.stop()
-            session = try await open(overrides + ["mcp_servers={}"], in: pass.workdir)
-            fence = [:]
-        }
-        let running = session
+        let running = CodexSession(
+            cwd: pass.workdir, host: ReadOnlyConnectors(), overrides: CodexSession.ownProcess(connectors: true) + overrides,
+            executable: executable)
         let watchdog = Task {
             try await Task.sleep(for: timeout)
             Log.info("review", "timed out")
@@ -45,19 +38,14 @@ public struct CodexReviewModel: MemoryModel {
             watchdog.cancel()
             Task { await running.stop() }
         }
+        try await running.start()
         try await running.startThread([
             "cwd": .string(pass.workdir), "model": .string(model), "approvalPolicy": ReadOnlyTools.approvalPolicy,
             "sandbox": "read-only", "ephemeral": true, "baseInstructions": .string(pass.instructions),
-            "config": .object(fence ?? [:]),
+            "config": ReadOnlyTools.fence(try await running.readConfig()),
         ])
         try await running.send(pass.prompt, effort: effort, outputSchema: pass.outputSchema)
         return await running.reply()
-    }
-
-    private func open(_ overrides: [String], in workdir: String) async throws -> CodexSession {
-        let session = CodexSession(cwd: workdir, host: ReadOnlyConnectors(), overrides: overrides, executable: executable)
-        try await session.start()
-        return session
     }
 
     /// Lets a connector tool run only when its name reads like a read.
