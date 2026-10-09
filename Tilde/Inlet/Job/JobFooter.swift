@@ -60,7 +60,7 @@ struct JobFooter: View {
                 .buttonStyle(.pill(Theme.ready, large: true))
                 .keyboardShortcut(.return, modifiers: .command)
         case .ready:
-            PullRequestButton(job: job, onAsk: onClose)
+            if let pr = job.pullRequest { PullRequestLink(pr: pr) }
             if job.isolation == .worktree {
                 Button { act { try await model.land(job.id) } } label: {
                     HStack(spacing: 6) {
@@ -72,7 +72,7 @@ struct JobFooter: View {
                 .keyboardShortcut(.return, modifiers: .command)
             }
         case .landed:
-            if job.pullRequest != nil { PullRequestButton(job: job, onAsk: onClose) }
+            if let pr = job.pullRequest { PullRequestLink(pr: pr) }
             Meta(text: job.ticker, color: Theme.ready)
         default:
             EmptyView()
@@ -192,30 +192,20 @@ private struct OpenInEditor: View {
     }
 }
 
-/// The job's pull request when there is one; otherwise, ask tilde for one.
-private struct PullRequestButton: View {
-    @Environment(AppModel.self) private var model
-    var job: Job
-    var onAsk: () -> Void
+/// The job's pull request, once there is one. Asking for one is just something you say.
+private struct PullRequestLink: View {
+    var pr: PullRequest
 
     var body: some View {
-        if let pr = job.pullRequest {
-            Button {
-                if let url = URL(string: pr.url) { NSWorkspace.shared.open(url) }
-            } label: {
-                HStack(spacing: 6) {
-                    Text("PR #\(pr.number)")
-                    Text(pr.state.lowercased()).foregroundStyle(pr.state == "MERGED" ? Theme.ready : Theme.text3)
-                    Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold))
-                }
+        Button {
+            if let url = URL(string: pr.url) { NSWorkspace.shared.open(url) }
+        } label: {
+            HStack(spacing: 6) {
+                Text("PR #\(pr.number)")
+                Text(pr.state.lowercased()).foregroundStyle(pr.state == "MERGED" ? Theme.ready : Theme.text3)
+                Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold))
             }
-            .buttonStyle(.outline(large: true))
-        } else {
-            Button("Ask for a PR") {
-                model.send("Open a pull request for \(job.id) (\(job.title)) following my conventions.", about: nil)
-                onAsk()
-            }
-            .buttonStyle(.outline(large: true))
         }
+        .buttonStyle(.outline(large: true))
     }
 }
