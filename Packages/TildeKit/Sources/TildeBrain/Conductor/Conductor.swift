@@ -10,8 +10,8 @@ import WorkerKit
 ///
 /// This file holds its state and lifecycle. The rest is split by responsibility:
 /// talking with the owner (`+Conversation`), running workers (`+Workers`), review
-/// actions (`+Review`), speaking up unprompted (`+Initiative`), the memory passes
-/// (`+Memory`), state on disk (`+Persistence`), and the manager's tools (`Tools/`).
+/// actions (`+Review`), speaking up unprompted (`+Initiative`, `+Briefing`), the memory
+/// passes (`+Memory`), state on disk (`+Persistence`), and the manager's tools (`Tools/`).
 @MainActor @Observable
 public final class Conductor {
     /// A reply in progress, shown as a caption by the cursor.
@@ -77,7 +77,10 @@ public final class Conductor {
         public var scribe = CodexMemoryModel(effort: "low")
         /// The model behind the dream and the first meeting.
         public var dream = CodexMemoryModel(effort: "medium")
-        /// Watch PRs, agents and jobs, and speak up when it matters.
+        /// The background review's model: read-only, with the owner's connected apps.
+        public var review = CodexReviewModel()
+        /// Watch PRs, agents and jobs, keep goals and the agenda, review in the background,
+        /// brief each morning, and speak up when it matters.
         public var initiative = true
         public var projectRoots = ProjectIndex.defaultRoots
         public init() {}
@@ -96,7 +99,7 @@ public final class Conductor {
         dreamer = Dreamer(memory: memory, home: home, model: config.dream) { [home, projects, notebook = memory.notebook] day in
             await Evidence.gather(day: day, home: home, notebook: notebook, projects: projects)
         }
-        initiative = Initiative(home: home, projects: projects)
+        initiative = Initiative(home: home, projects: projects, review: config.review)
     }
 
     public func start() async throws {

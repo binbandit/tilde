@@ -1,13 +1,15 @@
 import Foundation
+import TildeMemory
 import TildeSupport
 import TildeWork
 
-/// tilde's initiative: cheap, read-only watchers that notice what a good
-/// chief of staff would mention, and a delivery policy that decides when.
+/// tilde's initiative: cheap, read-only watchers that notice what a good chief of staff would
+/// mention, the follow-ups, routines and goals that come due, a background review that connects
+/// the dots, and a delivery policy that decides when any of it is said.
 ///
-/// Watchers (in Watchers/) only observe. The manager decides whether an observation deserves
-/// a word, phrases it, and offers to act; acting still waits for a yes unless
-/// rules.md says otherwise.
+/// Watchers (in Watchers/) only observe. Goals and the agenda (in Agenda/) live in the notebook.
+/// The review (in Review/) only reads. The manager decides whether an observation deserves a word,
+/// phrases it, and offers to act; acting still waits for a yes unless rules.md says otherwise.
 public actor Initiative {
     public struct Seen: Codable, Sendable {
         /// Last known state per subject, to detect transitions.
@@ -17,21 +19,37 @@ public actor Initiative {
         /// When anything about a subject was last raised.
         var subjects: [String: Date] = [:]
         var baselined = false
+        /// Routines: when each last came due (or was first seen), by its agenda line.
+        var fired: [String: Date] = [:]
+        /// Goals: the check-in last handed to the manager, by path.
+        var checkIns: [String: String] = [:]
+        /// When the last morning brief was given.
+        var briefed: Date?
+        /// When the background review last started.
+        var reviewed: Date?
     }
 
-    private let home: TildeHome
+    let home: TildeHome
+    let notebook: Notebook
     private let projects: ProjectIndex
+    let reviewModel: any MemoryModel
     var seen: Seen
     /// Observations waiting for the right moment.
-    private var held: [Notice] = []
+    var held: [Notice] = []
     private var interrupts: [Date] = []
     /// GitHub is asked at most every few minutes; between polls the last answer stands.
-    private var pulls: [PullRequestWatch.Pull] = []
+    var pulls: [PullRequestWatch.Pull] = []
     private var polledAt = Date.distantPast
+    /// Agents that the last look found waiting on the owner.
+    var waiting: [AgentWatch.Waiting] = []
+    /// One background review at a time.
+    var reviewing = false
 
-    public init(home: TildeHome, projects: ProjectIndex) {
+    public init(home: TildeHome, projects: ProjectIndex, review: any MemoryModel = CodexReviewModel()) {
         self.home = home
         self.projects = projects
+        notebook = Notebook(url: home.notebook)
+        reviewModel = review
         seen = (try? Data(contentsOf: home.state.appending(path: "initiative.json")))
             .flatMap { try? JSONDecoder().decode(Seen.self, from: $0) } ?? Seen()
     }
@@ -72,7 +90,7 @@ public actor Initiative {
         return false
     }
 
-    private func persist() {
+    func persist() {
         if let data = try? JSONEncoder().encode(seen) {
             try? data.write(to: home.state.appending(path: "initiative.json"), options: .atomic)
         }
@@ -91,7 +109,8 @@ public actor Initiative {
         }
         found += nudges(pulls, focusedRepo: focusedRepo)
         found += JobWatch.notices(jobs)
-        found += AgentWatch.waiting(since: .now.addingTimeInterval(-3 * 3600)).map(\.notice)
+        waiting = AgentWatch.waiting(since: .now.addingTimeInterval(-3 * 3600))
+        found += waiting.map(\.notice)
         if !seen.baselined {
             seen.baselined = true
             for observation in found { seen.raised[observation.key] = .now }
@@ -100,5 +119,20 @@ public actor Initiative {
         }
         persist()
         return found
+    }
+}
+
+extension Initiative.Seen {
+    /// Lenient, so state written by an older tilde (missing newer fields) still loads.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        states = try c.decodeIfPresent([String: String].self, forKey: .states) ?? [:]
+        raised = try c.decodeIfPresent([String: Date].self, forKey: .raised) ?? [:]
+        subjects = try c.decodeIfPresent([String: Date].self, forKey: .subjects) ?? [:]
+        baselined = try c.decodeIfPresent(Bool.self, forKey: .baselined) ?? false
+        fired = try c.decodeIfPresent([String: Date].self, forKey: .fired) ?? [:]
+        checkIns = try c.decodeIfPresent([String: String].self, forKey: .checkIns) ?? [:]
+        briefed = try c.decodeIfPresent(Date.self, forKey: .briefed)
+        reviewed = try c.decodeIfPresent(Date.self, forKey: .reviewed)
     }
 }

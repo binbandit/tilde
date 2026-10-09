@@ -48,4 +48,7 @@ public protocol Perception: AnyObject {
     func currentContext() -> TapContext
     /// A compact, human-readable account of recent app and window activity.
     func recentActivity(hours: Double) -> String
+    /// Calendar events from now until `hours` ahead (with who and the notes) and reminders due
+    /// today, as text. Empty when there's nothing, or tilde hasn't been given access.
+    func schedule(hours: Double) async -> String
 }

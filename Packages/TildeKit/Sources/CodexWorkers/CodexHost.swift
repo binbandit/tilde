@@ -11,6 +11,9 @@ public protocol CodexHost: Sendable {
     func callTool(_ name: String, arguments: JSON) async -> ToolResult
     /// An MCP tool (computer use, mostly) asking before it acts.
     func approveToolUse(connector: String, message: String) async -> Bool
+    /// The same, with the tool's name when Codex says which tool is asking. Hosts that
+    /// decide by tool implement this one; the default asks `approveToolUse(connector:message:)`.
+    func approveToolUse(connector: String, tool: String?, message: String) async -> Bool
     /// Extra sandbox permissions (network, paths outside the workspace).
     func approvePermissions(reason: String?, requested: JSON) async -> Bool
 }
@@ -21,5 +24,8 @@ extension CodexHost {
     public func answer(_ questions: [WorkerQuestion]) async -> [String]? { nil }
     public func callTool(_ name: String, arguments: JSON) async -> ToolResult { .error("Unknown tool.") }
     public func approveToolUse(connector: String, message: String) async -> Bool { false }
+    public func approveToolUse(connector: String, tool: String?, message: String) async -> Bool {
+        await approveToolUse(connector: connector, message: message)
+    }
     public func approvePermissions(reason: String?, requested: JSON) async -> Bool { false }
 }

@@ -90,6 +90,8 @@ public struct Notebook: Sendable {
             - `rules.md`: what agents may do without asking
             - `projects/`: one note per project (paths, aliases, stack, how to build and test)
             - `journal/`: one note per day
+            - `goals/`: what I've handed tilde to keep moving, one note per goal
+            - `agenda.md`: follow-ups and routines, with their times
             - `tasks/`: one note per delegated job
 
             tilde commits every change. `git log` shows what it learned and when.

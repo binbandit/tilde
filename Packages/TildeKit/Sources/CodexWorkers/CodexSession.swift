@@ -92,6 +92,11 @@ public actor CodexSession {
         activeTurn = result["turn"]?["id"]?.string
     }
 
+    /// The effective configuration this process loaded (`config.toml` plus overrides).
+    public func readConfig() async throws -> JSON {
+        try await request("config/read", [:])["config"] ?? [:]
+    }
+
     public func interrupt() async {
         guard let threadID, let activeTurn else { return }
         _ = try? await request("turn/interrupt", ["threadId": .string(threadID), "turnId": .string(activeTurn)])
@@ -218,7 +223,8 @@ public actor CodexSession {
             guard meta?["codex_approval_kind"] != nil else {
                 return ["result": ["action": "decline", "content": nil, "_meta": nil]]
             }
-            let ok = await host.approveToolUse(connector: connector, message: message)
+            let tool = meta?["tool_name"]?.string ?? meta?["tool_title"]?.string ?? Self.toolName(in: message)
+            let ok = await host.approveToolUse(connector: connector, tool: tool, message: message)
             return ["result": ["action": ok ? "accept" : "decline", "content": nil, "_meta": nil]]
         case "item/permissions/requestApproval":
             let requested = params["permissions"] ?? [:]
@@ -234,5 +240,12 @@ public actor CodexSession {
         default:
             return ["error": ["code": -32601, "message": .string("tilde doesn't handle \(method)")]]
         }
+    }
+
+    /// Plain MCP servers name the tool only in the prompt: `Allow the linear MCP server to run tool "get_issue"?`
+    static func toolName(in message: String) -> String? {
+        guard let start = message.range(of: "tool \""), let end = message[start.upperBound...].firstIndex(of: "\"") else { return nil }
+        let name = message[start.upperBound..<end]
+        return name.isEmpty ? nil : String(name)
     }
 }

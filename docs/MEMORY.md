@@ -19,6 +19,8 @@ rules.md            what agents may do without asking (always in context)
 projects/<name>.md  paths, aliases, stack, how to build and test, decisions
 topics/<name>.md    anything else worth knowing ("pull requests", "swiftui")
 tasks/<job>.md      every delegated job: brief, each decision and why, outcome
+goals/<slug>.md     standing goals tilde keeps moving: objective, done when, plan, log
+agenda.md           follow-ups and routines, with their times (see docs/INITIATIVE.md)
 journal/<date>.md   each day: a summary from the dream, plus tilde's log
 ```
 

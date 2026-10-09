@@ -26,8 +26,8 @@ A good EA doesn't wait to be asked. They know your goals and your day, notice wh
 
 ```
 sources ─▶ watchers ─────────────┐
-       └─▶ background review ────┼─▶ notices ─▶ delivery policy ─▶ manager ─▶ notch (peek) / notification (away)
-goals, follow-ups, routines (due) ┘
+       └─▶ background review ────┴─▶ notices ─▶ delivery policy ─┐
+goals, follow-ups, routines (due) ───────────────────────────────┴─▶ manager ─▶ notch (peek) / notification (away)
 ```
 
 - **Notice**: a key (dedupe), a subject (cooldown), urgency `now` / `soon` / `fyi`, the facts, a URL or local path, and a suggested action.
@@ -38,15 +38,17 @@ goals, follow-ups, routines (due) ┘
   - At most 4 interruptions an hour.
   - Each key once, and each subject at most every 30 minutes.
   - Bot-authored PRs (dependabot, renovate) are `fyi`.
+- **Due items** skip the policy: a follow-up, a routine run or a goal check-in is a commitment with a time, so it goes straight to the manager as `<due>`, and the manager decides what, if anything, to say.
 - **Manager**: decides whether a notice deserves a word at all. It phrases it in tilde's voice and offers one-tap actions ("Fix it" / "Not now"). It delegates on a yes, or acts directly where rules allow. Silence is the default.
 
 ## Background review
 
 - **When:**
-  - the first activity of the day (that becomes the morning brief)
+  - the first activity of the day after 6am (that becomes the morning brief: its findings, held `fyi` notices, today's calendar, overnight changes and today's agenda go to the manager as `<brief>`, and it says nothing if nothing deserves a word)
   - when you return after 15 minutes or more
   - every 90 minutes or so while you're active but not typing
-- **How:** a separate ephemeral Codex thread, read-only sandbox, never `approvalPolicy` escalation, with your MCP connectors and only read-only tool calls allowed.
+- **How:** a separate ephemeral Codex thread in a read-only sandbox, with your MCP connectors and only read-only tool calls allowed. One at a time, stopped after 4 minutes.
+  - `approvalPolicy: never` alone isn't read-only: Codex runs any tool `config.toml` pre-approves (`approval_mode = "approve"`) without asking. So nothing may escalate except connector tool prompts, every configured server and app is put in `writes` mode for the thread (tools annotated read-only run; every other call prompts), and tilde answers each prompt itself: allowed only when the tool's name reads as a read (starts with get, list, search, read, query, fetch or view, and has no write verb in it). Connectors whose names can't be fenced this way aren't loaded at all.
 - **It gets:**
   - goals with their status
   - open loops: unanswered questions, unlanded work, stale branches, follow-ups due soon
@@ -66,9 +68,10 @@ goals, follow-ups, routines (due) ┘
 - `goals/<slug>.md`:
   - frontmatter: `status` (active / paused / done), `check-in` (next time to review), `project` (path)
   - sections: Objective, Done when, Plan, Log
-- Follow-ups and routines live in `agenda.md`, one bullet each, with a machine-readable time:
+- Follow-ups and routines live in `agenda.md` (under `## Follow-ups` and `## Routines`), one bullet each, with a machine-readable time:
   - `- 2026-10-09 17:00 check on the nav bar (j-n8v3)`
-  - `- every weekday 09:00 morning brief`
+  - `- every weekday 09:00 morning brief` (`every day`, `weekday`, `weekend`, or `monday` to `sunday`)
+  - A follow-up is handed over once, even if late, then removed. A routine first seen waits for its next time, and one missed by more than 6 hours (the Mac was asleep) is skipped. A goal comes due once per `check-in`; the manager sets the next one.
 - The manager gets tools to set, update and close goals, add and remove follow-ups and routines, and read the agenda. When something comes due, tilde posts `<due>` to the manager, which acts.
 
 ## Trust

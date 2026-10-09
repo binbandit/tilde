@@ -30,7 +30,7 @@ extension Conductor {
     var lookTool: AgentTool {
         AgentTool(
             "look",
-            "What \(Owner.firstName) is doing right now: frontmost app, window, terminal directory, recent activity.",
+            "What \(Owner.firstName) is doing right now (frontmost app, window, terminal directory, recent activity) and what's on their calendar.",
             schema: AgentTool.object([:])
         ) { _ in await self.toolLook() }
     }
@@ -65,6 +65,8 @@ extension Conductor {
         guard let perception else { return .ok("No live context available.") }
         let context = perception.currentContext()
         let now = context.attributes.map { "\($0.0): \($0.1)" }.joined(separator: "\n")
-        return .ok("Now:\n\(now.isEmpty ? "(nothing in focus)" : now)\n\nRecently:\n\(perception.recentActivity(hours: 3))")
+        let schedule = await perception.schedule(hours: 12)
+        return .ok("Now:\n\(now.isEmpty ? "(nothing in focus)" : now)\n\nRecently:\n\(perception.recentActivity(hours: 3))"
+            + "\n\nComing up:\n\(schedule.isEmpty ? "(nothing on the calendar, or no access)" : schedule)")
     }
 }

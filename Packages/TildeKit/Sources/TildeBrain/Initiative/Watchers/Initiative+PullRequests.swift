@@ -3,10 +3,10 @@ import TildeWork
 
 /// Pull requests: what changed since the last poll, and what's pending where the owner just looked.
 extension Initiative {
-    /// PR state changes worth a word.
+    /// PR state changes worth a word. Open PRs change state; merged ones only matter if main broke after.
     func transitions(_ pulls: [PullRequestWatch.Pull]) -> [Notice] {
         var found: [Notice] = []
-        for pull in pulls {
+        for pull in pulls where !pull.merged {
             let subject = pull.id
             let previous = seen.states[subject].map { $0.split(separator: "|", omittingEmptySubsequences: false).map(String.init) } ?? []
             let state = [pull.checks ?? "", pull.review ?? "", pull.mergeable ?? "", "\(pull.conversation)"]
@@ -48,8 +48,9 @@ extension Initiative {
             }
         }
         for pull in pulls where pull.reviewRequested {
+            // Dependency bumps and other bot PRs can wait until you look.
             found.append(Notice(
-                key: "\(pull.id):review-requested", subject: pull.id, urgency: .soon,
+                key: "\(pull.id):review-requested", subject: pull.id, urgency: pull.authorIsBot ? .fyi : .soon,
                 summary: "\(pull.author) asked for your review on \(pull.label) \"\(pull.title)\".", url: pull.url,
                 project: localPath(for: pull), suggestion: "summarise the change and anything that looks risky"))
         }
@@ -66,7 +67,7 @@ extension Initiative {
     func nudges(_ pulls: [PullRequestWatch.Pull], focusedRepo: String?) -> [Notice] {
         guard let focusedRepo else { return [] }
         let name = (focusedRepo as NSString).lastPathComponent.lowercased()
-        return pulls.filter { $0.isMine && $0.repoName.lowercased() == name }.compactMap { pull in
+        return pulls.filter { $0.isMine && !$0.merged && $0.repoName.lowercased() == name }.compactMap { pull in
             var pending: [String] = []
             if pull.checks == "FAILURE" { pending.append("failing checks") }
             if pull.mergeable == "CONFLICTING" { pending.append("a merge conflict") }

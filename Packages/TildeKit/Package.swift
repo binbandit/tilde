@@ -48,7 +48,7 @@ let package = Package(
         .testTarget(name: "TildeSupportTests", dependencies: ["TildeSupport"]),
         .testTarget(name: "WorkerKitTests", dependencies: ["WorkerKit", "TildeSupport"]),
         .testTarget(name: "ClaudeWorkersTests", dependencies: ["ClaudeWorkers", "WorkerKit", "TildeSupport"]),
-        .testTarget(name: "CodexWorkersTests", dependencies: ["CodexWorkers", "TildeSupport"]),
+        .testTarget(name: "CodexWorkersTests", dependencies: ["CodexWorkers", "TildeSupport"], exclude: ["Fixtures"]),
         .testTarget(name: "ACPWorkersTests", dependencies: ["ACPWorkers", "WorkerKit", "TildeSupport"], exclude: ["Fixtures"]),
         .testTarget(name: "StreamWorkersTests", dependencies: ["StreamWorkers", "WorkerKit", "TildeSupport"], exclude: ["Fixtures"]),
         .testTarget(name: "HarnessesTests", dependencies: ["Harnesses", "WorkerKit"]),
@@ -56,6 +56,7 @@ let package = Package(
         .testTarget(name: "TildeWorkTests", dependencies: ["TildeWork", "WorkerKit", "TildeSupport"]),
         .testTarget(
             name: "TildeBrainTests",
-            dependencies: ["TildeBrain", "Harnesses", "TildeMemory", "TildeWork", "WorkerKit", "TildeSupport"]),
+            dependencies: ["TildeBrain", "Harnesses", "TildeMemory", "TildeWork", "WorkerKit", "TildeSupport"],
+            exclude: ["Fixtures"]),
     ]
 )

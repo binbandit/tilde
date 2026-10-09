@@ -29,6 +29,30 @@ if args.contains("--initiative") {
     exit(0)
 }
 
+// `tilde-smoke --agenda`: goals and follow-ups as tilde reads them from the notebook (read-only).
+if args.contains("--agenda") {
+    let notebook = Notebook(url: TildeHome.default.notebook)
+    print("goals:")
+    for goal in Goal.all(in: notebook) { print(" -", goal.digest) }
+    print("agenda:")
+    for item in Agenda(text: notebook.read("agenda.md")).items {
+        print(" ", item.line(), item.next(after: .now).map { "(next \($0.formatted(date: .abbreviated, time: .shortened)))" } ?? "(due now)")
+    }
+    exit(0)
+}
+
+// `tilde-smoke --review`: one background review pass over TILDE_HOME, with your Codex connectors
+// (read-only), printing what it would raise. Runs a real model.
+if args.contains("--review") {
+    let conductor = try Conductor()
+    try await conductor.memory.prepare()
+    let started = Date()
+    let found = await conductor.reviewNow()
+    print(String(format: "reviewed in %.0fs", Date().timeIntervalSince(started)))
+    for notice in found { print(" - [\(notice.urgency)] \(notice.summary)\(notice.suggestion.map { " Could: \($0)" } ?? "") \(notice.url ?? "")") }
+    exit(0)
+}
+
 if args.contains("--introduce") {
     var config = Conductor.Config()
     if let roots = args.firstIndex(of: "--roots").map({ args[$0 + 1] }) { config.projectRoots = roots.split(separator: ",").map(String.init) }

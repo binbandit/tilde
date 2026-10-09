@@ -14,7 +14,7 @@ struct TaskLog: Sendable {
         note.set("paths", [job.repoPath])
         note.set("harness", [job.harness.rawValue])
         if let branch = job.branch { note.set("branch", [branch]) }
-        note.set("created", [Self.stamp(job.createdAt)])
+        note.set("created", [LocalTime.format(job.createdAt)])
         note.sections = [("Brief", job.brief), ("Log", "")]
         write(note)
     }
@@ -57,12 +57,5 @@ struct TaskLog: Sendable {
         let url = notebook.url.appending(path: note.path)
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? note.render().write(to: url, atomically: true, encoding: .utf8)
-    }
-
-    /// Local time, the way Brayden reads it: 2026-10-08 22:37.
-    static func stamp(_ date: Date) -> String {
-        date.formatted(Date.VerbatimFormatStyle(
-            format: "\(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits) \(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits)",
-            timeZone: .current, calendar: .current))
     }
 }
