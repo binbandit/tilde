@@ -71,6 +71,19 @@ extension Conductor {
         }
     }
 
+    /// Takes back a question that no longer needs an answer, leaving it in the thread with why.
+    func withdraw(_ attentionID: String, because reason: String) {
+        guard let index = attention.firstIndex(where: { $0.id == attentionID }) else { return }
+        let item = attention.remove(at: index)
+        signal.yield(.resolved(attentionID: item.id))
+        persist()
+        Log.info("initiative", "withdrew \"\(item.question)\": \(reason)")
+        guard let i = thread.firstIndex(where: { $0.attentionID == item.id }) else { return }
+        thread[i].attentionID = nil
+        thread[i].settled = reason
+        saveThread()
+    }
+
     // MARK: Manager output
 
     func handle(_ output: Manager.Output) {
@@ -117,9 +130,26 @@ extension Conductor {
 
     /// Adds a message, starting a new thread when the day has turned.
     func append(_ message: Message) {
-        if let first = thread.first, !Calendar.current.isDateInToday(first.at) { thread = [] }
+        if !Calendar.current.isDateInToday(threadDay) {
+            thread = []
+            threadDay = .now
+            reconcileQuestions()
+        }
         thread.append(message)
         saveThread()
+    }
+
+    /// Keeps the thread honest about open questions: the ones still waiting are in it (carried
+    /// over from an earlier day if need be), and the ones a restart dropped no longer look open.
+    func reconcileQuestions() {
+        for i in thread.indices where thread[i].attentionID.map({ id in !attention.contains { $0.id == id } }) ?? false {
+            thread[i].attentionID = nil
+        }
+        let shown = Set(thread.compactMap(\.attentionID))
+        let carried = attention.filter { !shown.contains($0.id) }.map { item in
+            Message(from: .tilde, text: item.question, at: item.createdAt, jobs: item.jobID.map { [$0] } ?? [], attentionID: item.id)
+        }
+        thread.insert(contentsOf: carried, at: 0)
     }
 
     private func saveThread() { threads.save(thread) }

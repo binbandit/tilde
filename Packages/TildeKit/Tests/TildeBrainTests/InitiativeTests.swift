@@ -127,6 +127,63 @@ import TildeWork
         #expect(pulls[2].reviewRequested && pulls[2].authorIsBot && !pulls[2].isMine)
     }
 
+    @Test func questionsAboutPullRequestsWithdrawOnceTheyRecover() async throws {
+        let initiative = try initiative()
+        var other = pull(checks: "FAILURE")
+        other.id = "me/app#8"
+        other.number = 8
+        _ = await initiative.saw([pull(mergeable: "CONFLICTING"), other])
+        let questions = [ask("a-1", "app#7 conflicts and #8 is failing. Fix both?"), ask("a-2", "Want a walk?")]
+        for question in questions { await initiative.link(question) }
+        #expect(await initiative.moot(questions).isEmpty)
+
+        // One recovers; the question still stands for the other. Checks running again aren't passing yet.
+        other.checks = "PENDING"
+        _ = await initiative.saw([pull(mergeable: "MERGEABLE"), other], at: .now.addingTimeInterval(1))
+        #expect(await initiative.moot(questions).isEmpty)
+
+        var merged = pull(mergeable: "UNKNOWN")
+        merged.merged = true
+        other.checks = "SUCCESS"
+        _ = await initiative.saw([merged, other], at: .now.addingTimeInterval(2))
+        #expect(await initiative.moot(questions) == ["a-1": "app#7 merged, checks pass on app#8"])
+    }
+
+    @Test func aQuestionAboutAHealthyPullRequestWaitsForItToMerge() async throws {
+        let initiative = try initiative()
+        _ = await initiative.saw([pull(checks: "SUCCESS", review: "APPROVED")])
+        // Asked before tilde tied questions to PRs: it's tied on the next look.
+        let question = ask("a-1", "app#7 is approved and green. Merge it?")
+        #expect(await initiative.moot([question]).isEmpty)
+        var merged = pull()
+        merged.merged = true
+        _ = await initiative.saw([merged], at: .now.addingTimeInterval(1))
+        #expect(await initiative.moot([question]) == ["a-1": "app#7 merged"])
+    }
+
+    @Test func pullRequestsOffTheWatchedListsAreKnownByTheirRepo() async throws {
+        let initiative = try initiative()
+        _ = await initiative.saw([pull()])
+        await initiative.link(ask("a-1", "app#703 and #704 conflict with their base. Fix them?"))
+        #expect(await initiative.seen.asks["a-1"]?.map(\.subject) == ["me/app#703", "me/app#704"])
+        await initiative.link(ask("a-2", "Pick option #2 or #3?"))  // no repo named, no watched PR with that number
+        #expect(await initiative.seen.asks["a-2"] == nil)
+    }
+
+    @Test func questionsForAJobWaitForTheirAnswer() async throws {
+        let initiative = try initiative()
+        var merged = pull()
+        merged.merged = true
+        _ = await initiative.saw([merged])
+        var question = ask("a-1", "Push app#7?")
+        question.jobID = "j-1"
+        #expect(await initiative.moot([question]).isEmpty)
+    }
+
+    func ask(_ id: String, _ question: String) -> Attention {
+        Attention(id: id, jobID: nil, question: question, options: ["Yes", "No"], recommended: 0, detail: nil, requestID: nil, isApproval: false)
+    }
+
     @Test func mergedPullRequestsOnlyMatterWhenMainBreaks() async throws {
         let initiative = try initiative()
         var merged = pull(checks: "SUCCESS")

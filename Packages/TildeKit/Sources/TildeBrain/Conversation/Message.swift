@@ -25,10 +25,12 @@ public struct Message: Identifiable, Codable, Sendable, Hashable {
     public var noted: [String]
     /// Something went wrong (shown quietly, in red).
     public var trouble: Bool
+    /// A question that stopped needing an answer, and why ("oh-fx#713 merged").
+    public var settled: String?
 
     public init(
         id: String? = nil, from: From, text: String, at: Date = .now, pointing: String? = nil, jobs: [String] = [],
-        attentionID: String? = nil, streaming: Bool = false, noted: [String] = [], trouble: Bool = false
+        attentionID: String? = nil, streaming: Bool = false, noted: [String] = [], trouble: Bool = false, settled: String? = nil
     ) {
         self.id = id ?? IDs.make("m")
         self.from = from
@@ -40,5 +42,6 @@ public struct Message: Identifiable, Codable, Sendable, Hashable {
         self.streaming = streaming
         self.noted = noted
         self.trouble = trouble
+        self.settled = settled
     }
 }

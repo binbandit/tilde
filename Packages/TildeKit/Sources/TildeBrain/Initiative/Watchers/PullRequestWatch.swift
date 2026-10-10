@@ -27,6 +27,8 @@ enum PullRequestWatch {
         var defaultBranchChecks: String?
         var defaultBranchOID: String?
         var merged: Bool
+        /// Closed without merging.
+        var closed = false
         /// A bot opened it (dependabot, renovate, github-actions, any `[bot]`).
         var authorIsBot = false
         var updatedAt: Date?
@@ -48,6 +50,9 @@ enum PullRequestWatch {
           }
           requested: search(query: "is:open is:pr review-requested:@me archived:false", type: ISSUE, first: 15) { nodes { ...pr } }
         }
+        """ + fragment
+
+    static let fragment = """
         fragment pr on PullRequest {
           number title url state headRefName mergeable reviewDecision updatedAt mergedAt
           author { login __typename }
@@ -63,6 +68,17 @@ enum PullRequestWatch {
         guard let output = try? await Shell.check(["gh", "api", "graphql", "-f", "query=\(query)"]), let json = JSON.parse(output)
         else { return nil }
         return pulls(from: json)
+    }
+
+    /// One PR by id (`owner/repo#12`), wherever it stands: for the ones that dropped off the lists above.
+    static func fetch(_ id: String) async -> Pull? {
+        guard let match = id.firstMatch(of: /^([^\/]+)\/([^#]+)#(\d+)$/) else { return nil }
+        let query = "query { viewer { login } repository(owner: \"\(match.1)\", name: \"\(match.2)\") "
+            + "{ pullRequest(number: \(match.3)) { ...pr } } }\n" + fragment
+        guard let output = try? await Shell.check(["gh", "api", "graphql", "-f", "query=\(query)"]), let json = JSON.parse(output),
+            let node = json["data"]?["repository"]?["pullRequest"]
+        else { return nil }
+        return pull(node, me: json["data"]?["viewer"]?["login"]?.string ?? "", requested: false)
     }
 
     /// Your open PRs, the ones you merged in the last day, and PRs waiting on your review.
@@ -106,7 +122,7 @@ enum PullRequestWatch {
             defaultBranch: node["repository"]?["defaultBranchRef"]?["name"]?.string,
             defaultBranchChecks: defaultTarget?["statusCheckRollup"]?["state"]?.string,
             defaultBranchOID: defaultTarget?["oid"]?.string.map { String($0.prefix(10)) },
-            merged: node["state"]?.string == "MERGED",
+            merged: node["state"]?.string == "MERGED", closed: node["state"]?.string == "CLOSED",
             authorIsBot: isBot(login: author, type: node["author"]?["__typename"]?.string),
             updatedAt: node["updatedAt"]?.string.flatMap { try? Date($0, strategy: .iso8601) },
             mergedAt: node["mergedAt"]?.string.flatMap { try? Date($0, strategy: .iso8601) })
@@ -125,6 +141,26 @@ enum PullRequestWatch {
 }
 
 extension PullRequestWatch.Pull {
+    /// What's wrong with it that someone could fix.
+    enum Trouble: String, Codable, Sendable { case checks, conflict, changes }
+
+    var troubles: Set<Trouble> {
+        var troubles: Set<Trouble> = []
+        if ["FAILURE", "ERROR"].contains(checks) { troubles.insert(.checks) }
+        if mergeable == "CONFLICTING" { troubles.insert(.conflict) }
+        if review == "CHANGES_REQUESTED" { troubles.insert(.changes) }
+        return troubles
+    }
+
+    /// Whether a trouble is over, not just quiet: checks that are running again haven't passed yet.
+    func isPast(_ trouble: Trouble) -> Bool {
+        switch trouble {
+        case .checks: checks == "SUCCESS"
+        case .conflict: mergeable == "MERGEABLE"
+        case .changes: review != "CHANGES_REQUESTED"
+        }
+    }
+
     /// Where it stands, plainly: "merged", or "checks failing (lint), changes requested, conflicts".
     var standing: String {
         if merged {

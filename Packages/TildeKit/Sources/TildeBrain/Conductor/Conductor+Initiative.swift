@@ -11,6 +11,7 @@ extension Conductor {
         while !Task.isCancelled {
             let focused = perception?.currentContext().repo
             let found = await initiative.look(jobs: jobs, focusedRepo: focused)
+            for (id, reason) in await initiative.moot(attention) { withdraw(id, because: reason) }
             let due = await initiative.due(found, typing: Self.typing, looking: looking)
             if !due.isEmpty { report(due) }
             let coming = await initiative.comingDue()
@@ -76,24 +77,30 @@ extension Conductor {
     }
 
     /// Brayden is back at the Mac. The first time today that's the morning brief; after a while
-    /// away, tilde briefs him on anything that happened and takes a fresh look around.
+    /// away, tilde briefs them on what happened meanwhile (if anything did) and takes a fresh look around.
     public func welcomeBack(after away: TimeInterval) {
         Task {
+            let since = Date.now.addingTimeInterval(-away)
             if await initiative.claimBrief() {
-                brief(since: .now.addingTimeInterval(-away))
+                brief(since: since)
                 return
             }
             guard away >= 15 * 60, replying == nil, !(await initiative.briefedRecently()) else { return }
+            reviewInBackground(looking: true)
+            let finished = jobs.filter { $0.updatedAt > since && [.ready, .failed, .stopped].contains($0.phase) }
+            let asked = attention.filter { $0.createdAt > since }
+            guard !finished.isEmpty || !asked.isEmpty else { return }
             let id = IDs.make("t")
             quietTaps.insert(id)
             replying = id
-            let minutes = Int(away / 60)
+            let sections = [("finished", finished.map { "- \($0.digest)" }), ("asked", asked.map { "- \($0.question)" })].filter { !$0.1.isEmpty }
+                .map { "<\($0.0)>\n\($0.1.joined(separator: "\n"))\n</\($0.0)>" }.joined(separator: "\n")
             await manager.post(.init(
-                "<return away=\"\(minutes)m\">\(Owner.firstName) is back at the Mac. If something happened while they were away "
-                    + "that they should know (work that finished, questions waiting on them), greet them with a one or two sentence "
-                    + "briefing in your voice. If nothing did, reply with an empty message.</return>",
-                tap: id))
-            reviewInBackground(looking: true)
+                "<return away=\"\(Int(away / 60))m\">\n\(Owner.firstName) is back at the Mac. While they were away:\n\(sections)\n"
+                    + "Greet them with a one or two sentence briefing in your voice. Questions are already in front of them with "
+                    + "their options, so say how many and what they're about rather than restating them. Reply with an empty "
+                    + "message if none of it deserves a word.\n</return>",
+                tap: id, jobs: finished.map(\.id)))
         }
     }
 }

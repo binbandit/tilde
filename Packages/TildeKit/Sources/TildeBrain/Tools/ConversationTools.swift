@@ -51,6 +51,8 @@ extension Conductor {
             recommended: args["recommended"]?.int, detail: args["detail"]?.string, requestID: pending == nil ? nil : requestID,
             isApproval: isApproval)
         raise(item)
+        // Questions about PRs withdraw themselves once the PRs merge or recover.
+        await initiative.link(item)
         if let jobID {
             log.append(jobID, "Asked \(Owner.firstName): \(question)")
             record(jobID, .tilde, .request, question)

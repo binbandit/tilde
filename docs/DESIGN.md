@@ -53,6 +53,10 @@ Every question tilde brings you has:
 
 Answers to a worker's question go straight to the worker. The manager is told, and the scribe learns from what you chose.
 
+A question waits until it's answered or stops mattering. tilde's own questions survive a restart and carry into the next day. One about a PR withdraws itself once the PR merges, closes, or recovers from what was wrong with it, and stays in the thread, dimmed, with why ("No longer needed: oh-fx#713 merged").
+
+Coming back after a while away, tilde says what happened meanwhile, if anything did: work that finished, and how many new questions are waiting and what about (they're already on screen, so it doesn't repeat them).
+
 ## A job, opened
 
 Click an agent (its chip in the conversation or its dot) and it opens wide out of the edge:

@@ -3,6 +3,13 @@ import TildeWork
 
 /// Pull requests: what changed since the last poll, and what's pending where the owner just looked.
 extension Initiative {
+    /// Takes in a fresh read of GitHub and returns what changed since the last one.
+    func saw(_ fresh: [PullRequestWatch.Pull], at now: Date = .now) -> [Notice] {
+        polledAt = now
+        pulls = fresh
+        return transitions(fresh)
+    }
+
     /// PR state changes worth a word. Open PRs change state; merged ones only matter if main broke after.
     func transitions(_ pulls: [PullRequestWatch.Pull]) -> [Notice] {
         var found: [Notice] = []

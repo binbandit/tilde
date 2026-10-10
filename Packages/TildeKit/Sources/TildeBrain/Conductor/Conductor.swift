@@ -55,6 +55,8 @@ public final class Conductor {
     /// Taps whose reply only appears if tilde actually says something (welcome-backs).
     @ObservationIgnored var quietTaps: Set<String> = []
     @ObservationIgnored private let initiativeEnabled: Bool
+    /// The day `thread` belongs to.
+    @ObservationIgnored var threadDay = Date.now
 
     public struct Config: Sendable {
         public var manager = Manager.Config()
@@ -93,6 +95,7 @@ public final class Conductor {
         try await memory.prepare()
         restore()
         thread = threads.load()
+        reconcileQuestions()
         Task { await manager.warm() }
         Task { await dreamer.catchUp() }
         if initiativeEnabled { Task { await watch() } }

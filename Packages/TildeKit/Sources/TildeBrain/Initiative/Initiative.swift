@@ -27,6 +27,8 @@ public actor Initiative {
         var briefed: Date?
         /// When the background review last started.
         var reviewed: Date?
+        /// Open questions about PRs, by attention id, so they can withdraw when moot.
+        var asks: [String: [Concern]] = [:]
     }
 
     let home: TildeHome
@@ -38,7 +40,9 @@ public actor Initiative {
     private var interrupts: [Date] = []
     /// GitHub is asked at most every few minutes; between polls the last answer stands.
     var pulls: [PullRequestWatch.Pull] = []
-    private var polledAt = Date.distantPast
+    var polledAt = Date.distantPast
+    /// The poll the open questions were last checked against.
+    var mootCheckedAt = Date.distantPast
     /// Agents that the last look found waiting on the owner.
     var waiting: [AgentWatch.Waiting] = []
     /// One background review at a time.
@@ -101,9 +105,7 @@ public actor Initiative {
     public func look(jobs: [Job], focusedRepo: String?) async -> [Notice] {
         var found: [Notice] = []
         if Date.now.timeIntervalSince(polledAt) > 180, let fresh = await PullRequestWatch.fetch() {
-            polledAt = .now
-            pulls = fresh
-            found += transitions(fresh)
+            found += saw(fresh)
         }
         found += nudges(pulls, focusedRepo: focusedRepo)
         found += JobWatch.notices(jobs)
@@ -132,5 +134,6 @@ extension Initiative.Seen {
         checkIns = try c.decodeIfPresent([String: String].self, forKey: .checkIns) ?? [:]
         briefed = try c.decodeIfPresent(Date.self, forKey: .briefed)
         reviewed = try c.decodeIfPresent(Date.self, forKey: .reviewed)
+        asks = try c.decodeIfPresent([String: [Initiative.Concern]].self, forKey: .asks) ?? [:]
     }
 }

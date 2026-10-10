@@ -71,14 +71,18 @@ final class LaunchLog: Sendable {
         HarnessCatalog.register(HarnessSpec(id: Harness(rawValue: "scripted"), label: "Scripted", executable: "/bin/sh", strengths: "Tests.") {
             ScriptedWorker(workdir: $0.workdir)
         })
+        let conductor = try Conductor(home: TildeHome(root: root.appending(path: "home")), config: config)
+        try await conductor.memory.prepare()
+        return conductor
+    }
+
+    var config: Conductor.Config {
         var config = Conductor.Config()
         config.projectRoots = [root.appending(path: "code").path]
         config.manager.executable = "/usr/bin/false"  // no model in these tests
         config.scribe.executable = "/usr/bin/false"
         config.dream.executable = "/usr/bin/false"
-        let conductor = try Conductor(home: TildeHome(root: root.appending(path: "home")), config: config)
-        try await conductor.memory.prepare()
-        return conductor
+        return config
     }
 
     func call(_ conductor: Conductor, _ tool: String, _ args: JSON) async -> ToolResult {
@@ -133,6 +137,20 @@ final class LaunchLog: Sendable {
         try await waitFor(conductor) { conductor.jobs.first?.phase == .deciding && conductor.attention.isEmpty }
         let note = try #require(conductor.memory.notebook.read("tasks/\(job.id).md"))
         #expect(note.contains("git push: denied"))
+    }
+
+    @Test func tildesOwnQuestionsOutliveARestartAndTheDay() async throws {
+        let first = try await makeConductor()
+        _ = await call(first, "ask", ["question": "Merge app#7?", "options": ["Merge", "Not now"]])
+        let asked = try #require(first.attention.first)
+
+        // The next launch, on a new day's empty thread: still open, and still there to answer.
+        let next = try Conductor(home: first.home, config: config)
+        next.restore()
+        next.reconcileQuestions()
+        #expect(next.attention.map(\.id) == [asked.id])
+        #expect(next.thread.map(\.attentionID) == [asked.id])
+        #expect(next.thread.first?.at == asked.createdAt)
     }
 
     @Test func scratchJobsNeedNoRepo() async throws {

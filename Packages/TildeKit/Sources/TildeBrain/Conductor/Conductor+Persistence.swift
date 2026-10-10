@@ -20,7 +20,8 @@ extension Conductor {
         guard let data = try? Data(contentsOf: snapshotURL), let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data)
         else { return }
         jobs = snapshot.jobs
-        attention = []  // their workers' pending requests died with the old process
+        // Questions for workers died with their requests; tilde's own still stand.
+        attention = snapshot.attention.filter { $0.requestID == nil }
         for job in jobs where job.phase.isActive {
             update(job.id) { $0.phase = .working; $0.ticker = "Resuming after a restart" }
             Task {
