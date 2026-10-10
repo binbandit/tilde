@@ -38,6 +38,9 @@ enum Fixtures {
             options: ["Fix it", "Not now"], recommended: 0, detail: nil, requestID: nil, isApproval: false)
         let ago = { (minutes: Double) in Date.now.addingTimeInterval(-minutes * 60) }
         let thread = [
+            Message(
+                from: .tilde, text: "oh-fx#498 now conflicts with main. Want me to rebase it in a worktree?", at: ago(19 * 60),
+                settled: "oh-fx#498 merged"),
             Message(from: .you, text: "create the navigation bar in the paradise app", at: ago(26), pointing: "~/Developer/frontend/paradise · Ghostty"),
             Message(from: .tilde, text: "On it. Claude Code is building it on its own branch, sticky like your other headers.", at: ago(26), jobs: ["j-n8v3"]),
             Message(from: .you, text: "and get codex to cover the cart with tests", at: ago(12)),

@@ -30,6 +30,8 @@ final class Inlet {
 
     /// How far a working top Inlet widens either side of the camera housing.
     static let wing: CGFloat = 44
+    /// A working Inlet on the side: the `~` with its dots below, room to breathe between.
+    static let pill = CGSize(width: 38, height: 80)
 
     /// How the shape looks: the views draw it and the controller hit-tests it from the same
     /// `shape(for:)`, so where the pointer counts as on tilde is always where tilde is going.
@@ -65,7 +67,7 @@ final class Inlet {
             case (.dormant, .top, nil): (46, 5, 2.5, 5)
             case (.compact, .top, nil): (nil, placement.menuBar, placement.menuBar / 2, 8)
             case (.dormant, _, _): (5, 46, 2.5, 5)
-            case (.compact, _, _): (38, 72, 16, 12)
+            case (.compact, _, _): (Self.pill.width, Self.pill.height, 16, 12)
             }
         // Until a look has been measured, something plausible to grow toward.
         let size = measured[look] ?? CGSize(width: 120, height: 120)

@@ -55,11 +55,19 @@ struct TildeWords: View {
             } else {
                 Prose(
                     text: message.text, size: 14, weight: message.attentionID == nil ? .regular : .medium,
-                    color: message.trouble ? Theme.failed : Theme.text)
+                    color: message.trouble ? Theme.failed : message.settled == nil ? Theme.text : Theme.text2)
                     .contentTransition(.opacity)
             }
             if let id = message.attentionID, let item = model.attention.first(where: { $0.id == id }) {
                 QuestionOptions(item: item)
+            }
+            if let settled = message.settled {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Image(systemName: "checkmark").font(.system(size: 9, weight: .bold))
+                    Text("No longer needed: \(settled)").font(.system(size: 12)).lineLimit(2)
+                }
+                .foregroundStyle(Theme.text3)
+                .transition(.opacity)
             }
             ForEach(chips, id: \.self) { jobID in
                 if let job = model.job(jobID) { CrewChip(job: job, actions: actions) }

@@ -85,11 +85,13 @@ struct ConversationView: View {
         return .idle
     }
 
-    /// A time between messages more than half an hour apart.
+    /// A time between messages more than half an hour apart, with the day for questions
+    /// still waiting from an earlier one.
     static func gap(before index: Int, in thread: [Message]) -> String? {
-        guard index > 0 else { return thread.first.map { $0.at.formatted(date: .omitted, time: .shortened) } }
-        let gap = thread[index].at.timeIntervalSince(thread[index - 1].at)
-        return gap > 30 * 60 ? thread[index].at.formatted(date: .omitted, time: .shortened) : nil
+        let at = thread[index].at
+        guard index == 0 || at.timeIntervalSince(thread[index - 1].at) > 30 * 60 else { return nil }
+        return Calendar.current.isDateInToday(at)
+            ? at.formatted(date: .omitted, time: .shortened) : at.formatted(.dateTime.weekday(.wide).hour().minute())
     }
 }
 

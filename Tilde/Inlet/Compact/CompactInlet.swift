@@ -16,18 +16,18 @@ struct CompactInlet: View {
                 dots.frame(width: Inlet.wing)
             }
         case (.top, nil):
-            HStack(spacing: 8) {
+            HStack(spacing: 12) {
                 TildeMark(mood: mood, size: 18)
                 if !model.openJobs.isEmpty { dots }
             }
             .padding(.horizontal, 15)
             .frame(maxHeight: .infinity)
         case (let edge, _):
-            VStack(spacing: 8) {
+            VStack(spacing: 14) {
                 TildeMark(mood: mood, size: 20)
                 dots
             }
-            .frame(width: 38, height: 72)
+            .frame(width: Inlet.pill.width, height: Inlet.pill.height)
             // Optically centred: the ears make the bezel side look heavier.
             .offset(x: edge == .left ? 2 : -2)
         }
