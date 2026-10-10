@@ -25,6 +25,14 @@ struct JobConversation: View {
         }
         .scrollIndicators(.never)
         .defaultScrollAnchor(.bottom)
+        // Scrolled, lines fade at the edges instead of being sliced; at rest the padding is clear of it.
+        .mask {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom).frame(height: 18)
+                Rectangle()
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom).frame(height: 12)
+            }
+        }
     }
 
     /// While nothing new is on screen, what's happening anyway. A run of steps
@@ -54,7 +62,7 @@ struct JobConversation: View {
             case .message:
                 Direction(entry: entry, agent: job.harness.label, isBrief: previous == nil)
             case .request where entry.from == .agent:
-                Marker(icon: "questionmark.circle.fill", tint: isOpen ? Theme.amber : Theme.text3, text: "Asked: \(entry.text)")
+                Marker(icon: "questionmark.circle.fill", tint: isOpen ? Theme.amber : Theme.text3, text: Self.asked(entry.text))
             case .request:
                 // tilde passing the agent's question on as it was needs no repeating.
                 Marker(
@@ -63,7 +71,7 @@ struct JobConversation: View {
             case .decision:
                 Marker(
                     icon: entry.text.hasPrefix("denied") ? "xmark.circle.fill" : "checkmark.circle.fill",
-                    tint: Theme.text3, text: "\(entry.from == .you ? "You" : "tilde") \(entry.text)")
+                    tint: Theme.text3, text: AttributedString(Self.decided(entry)))
             case .turnEnded:
                 TurnEnded(changes: entry.text, at: entry.at)
             case .event, .step:
@@ -72,6 +80,36 @@ struct JobConversation: View {
         case .steps(let steps):
             Steps(steps: steps, live: job.phase == .working && isLast)
         }
+    }
+}
+
+extension JobConversation {
+    /// What the agent asked, as a sentence: "Asked to run `npm install`". Requests are
+    /// recorded as "Tool: what", and a question as itself.
+    static func asked(_ request: String) -> AttributedString {
+        let parts = request.split(separator: ": ", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let verb = verbs[parts[0]] else { return AttributedString("Asked: \(request)") }
+        var what = AttributedString((parts[1] as NSString).abbreviatingWithTildeInPath)
+        what.font = .system(size: 11.5, weight: .medium, design: .monospaced)
+        return AttributedString("Asked to \(verb) ") + what
+    }
+
+    private static let verbs = [
+        "Bash": "run", "Shell": "run", "Write": "write", "Edit": "edit", "MultiEdit": "edit", "NotebookEdit": "edit",
+        "WebFetch": "fetch", "Sandbox": "step outside its sandbox:",
+    ]
+
+    /// Who decided a request, and how: "tilde allowed it", "You denied it: not now".
+    static func decided(_ entry: JobEntry) -> String {
+        let who = entry.from == .you ? "You" : "tilde"
+        let text = entry.text
+        if text == "allowed" || text == "denied" { return "\(who) \(text) it" }
+        // "denied (the reason)"
+        if text.hasPrefix("denied ("), text.hasSuffix(")") {
+            let reason = text.dropFirst(8).dropLast()
+            return reason.isEmpty ? "\(who) denied it" : "\(who) denied it: \(reason)"
+        }
+        return "\(who) \(text)"
     }
 }
 
@@ -212,8 +250,16 @@ private struct Steps: View {
 private struct Marker: View {
     var icon: String
     var tint: Color
-    var text: String
+    var text: AttributedString
     var small = false
+
+    init(icon: String, tint: Color, text: AttributedString, small: Bool = false) {
+        (self.icon, self.tint, self.text, self.small) = (icon, tint, text, small)
+    }
+
+    init(icon: String, tint: Color, text: String, small: Bool = false) {
+        self.init(icon: icon, tint: tint, text: AttributedString(text), small: small)
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 7) {
