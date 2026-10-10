@@ -2,7 +2,7 @@ import AppKit
 import TildeKit
 
 /// `tilde://debug/<route>` shows the Inlet in any state with fixture data
-/// (fixtures, empty, clear, inlet?mode=, listen?text=, job?id=, place?edge=, frame, hide),
+/// (fixtures, empty, clear, inlet?mode=&real=1, listen?text=, job?id=&as=conversation, place?edge=, frame, hide),
 /// for design work and screenshots without a live agent. Nothing here takes the keyboard.
 @MainActor
 enum DebugRoutes {
@@ -23,7 +23,8 @@ enum DebugRoutes {
             inlet.set(.rest)
             delegate.lens.hide()
         case "/inlet":
-            fixtures()
+            // &real=1 shows what's really there.
+            if value("real") != "1" { fixtures() }
             switch value("mode") ?? "open" {
             case "rest": inlet.set(.rest)
             case "compose":
@@ -42,8 +43,15 @@ enum DebugRoutes {
             model.listening = AppModel.Listening(transcript: value("text") ?? "", level: Double(value("level") ?? "0.4") ?? 0.4)
             inlet.listen(about: target)
         case "/job":
-            // ?id=<job id>, or the first ready job.
-            fixtures()
+            // ?id=<job id>, a real one if there is one, or the first ready fixture job.
+            if model.job(value("id")) == nil { fixtures() }
+            // &as=conversation shows a real job's conversation, standing in as a fixture without its diff.
+            if value("as") == "conversation", model.fixture == nil, var job = model.job(value("id")) {
+                model.loadTranscript(job.id)
+                let transcript = model.transcript(job.id)
+                job.diff = nil
+                model.fixture = AppModel.Fixture(thread: model.thread, jobs: [job], transcripts: [job.id: transcript])
+            }
             let job = value("id").flatMap { model.job($0) } ?? model.jobs.first { $0.phase == .ready }
             if let job { inlet.openJob(job, focus: false) }
         case "/place":

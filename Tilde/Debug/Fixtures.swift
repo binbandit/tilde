@@ -74,7 +74,14 @@ enum Fixtures {
                 e(19, .agent, .step, "Editing app/pricing/faq.ts"),
                 e(18, .agent, .step, "Running pnpm build"),
                 e(16, .agent, .step, "Running pnpm test app/pricing"),
-                e(15, .agent, .message, "Done. Both tiers are rewritten, the FAQ is tighter, and `pnpm build` and the pricing tests pass."),
+                e(15, .agent, .message, """
+                    Done. Here's what changed:
+
+                    - **Tiers:** Starter ($9) is now **Free** and **Team**, under a one-line subtitle
+                    - **FAQ:** the cancel answer says what actually happens to your access
+
+                    `pnpm build` and the pricing tests pass.
+                    """),
                 e(15, .agent, .turnEnded, "3 files +48 −19"),
                 e(14, .tilde, .message, "Highlight the Team tier, it's the one most people should pick."),
                 e(13, .agent, .step, "Editing app/pricing/page.tsx"),
@@ -132,5 +139,24 @@ enum Fixtures {
         +  { q: "Can I cancel anytime?", a: "Yes. Cancel from Settings and you keep access until the period ends." },
            { q: "Do you offer refunds?", a: "Within 14 days, no questions asked." },
          ]
+        diff --git a/app/pricing/tier-note.tsx b/app/pricing/tier-note.tsx
+        new file mode 100644
+        index 0000000..a1b2c3d
+        --- /dev/null
+        +++ b/app/pricing/tier-note.tsx
+        @@ -0,0 +1,5 @@
+        +export function TierNote({ children }: { children: React.ReactNode }) {
+        +  return <p className="mt-1 text-sm text-muted-foreground">{children}</p>
+        +}
+        +
+        +export default TierNote
+        diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+        index 7d1e2f3..8a9b0c1 100644
+        --- a/pnpm-lock.yaml
+        +++ b/pnpm-lock.yaml
+        @@ -1,3 +1,3 @@
+         lockfileVersion: '9.0'
+        -settings: {}
+        +settings: { autoInstallPeers: true }
         """
 }
