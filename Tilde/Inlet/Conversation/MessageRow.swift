@@ -53,11 +53,9 @@ struct TildeWords: View {
             if message.streaming, message.text.isEmpty {
                 Text("On it…").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.text2)
             } else {
-                Text(.init(message.text))
-                    .font(.system(size: 14, weight: message.attentionID == nil ? .regular : .medium))
-                    .foregroundStyle(message.trouble ? Theme.failed : Theme.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                Prose(
+                    text: message.text, size: 14, weight: message.attentionID == nil ? .regular : .medium,
+                    color: message.trouble ? Theme.failed : Theme.text)
                     .contentTransition(.opacity)
             }
             if let id = message.attentionID, let item = model.attention.first(where: { $0.id == id }) {

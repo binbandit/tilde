@@ -14,6 +14,7 @@ struct Composer: View {
     @State private var newMessage = false
 
     private var answering: Attention? { newMessage ? nil : model.openQuestion }
+    private var typed: Bool { !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         @Bindable var model = model
@@ -28,22 +29,34 @@ struct Composer: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Theme.text3)
                 }
+                .padding(.top, 3)
+                .padding(.trailing, 5)
             }
-            TextField("", text: $model.draft, prompt: Text(answering == nil ? "Tell tilde…" : "Your answer…").foregroundStyle(Theme.text3), axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Theme.text)
-                .lineLimit(1...6)
-                .focused($hasFocus)
-                .onSubmit(submit)
-                .onKeyPress(.escape) {
-                    actions.dismiss()
-                    return .handled
+            HStack(alignment: .bottom, spacing: 10) {
+                TextField("", text: $model.draft, prompt: Text(answering == nil ? "Tell tilde…" : "Your answer…").foregroundStyle(Theme.text3), axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1...6)
+                    .focused($hasFocus)
+                    .onSubmit(submit)
+                    .onKeyPress(.escape) {
+                        actions.dismiss()
+                        return .handled
+                    }
+                    .padding(.vertical, 3)
+                if typed {
+                    ComposerButton(icon: "arrow.up", filled: true, help: answering == nil ? "Send to tilde" : "Answer", action: submit)
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
                 }
+            }
+            .frame(minHeight: 26)
+            .animation(Theme.quick, value: typed)
             if let referent { PointingChip(label: referent.label) }
         }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 11)
+        .padding(.leading, 13)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
         .background(Theme.raised, in: .rect(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(hasFocus ? Theme.line : .clear, lineWidth: 1))
         .contentShape(.rect)

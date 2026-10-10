@@ -104,6 +104,8 @@ struct InletView: View {
         case .job:
             if case .job(let id) = inlet.mode, let job = model.job(id) {
                 JobView(job: job, height: min(860, placement.frame.height * 0.84), onClose: actions.dismiss)
+                    // Each job opens fresh, on the tab its state calls for.
+                    .id(job.id)
                     .padding(.top, placement.notch?.height ?? 0)
                     .fixedSize(horizontal: false, vertical: true)
                     .measured { inlet.measured[.job] = $0 }

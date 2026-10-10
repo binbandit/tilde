@@ -58,15 +58,17 @@ Answers to a worker's question go straight to the worker. The manager is told, a
 Click an agent (its chip in the conversation or its dot) and it opens wide out of the edge:
 
 - **Conversation**: everything between the agent and the people directing it, the same for every harness. The agent speaks on the left; tilde's brief and every follow-up, tilde's or yours, sit in wells on the right. Its steps fold into one line, and what it asked, who answered, and where each turn ended are marked in between.
-- **Changes**: the diff, where clicking a file or line opens it in your editor. Work waiting for review opens here.
-- **Talk to it**: what you type goes straight to the agent (tilde hears it too, and won't contradict you). When it's waiting on you, what you type answers it. A stopped agent picks its session back up.
+- **Changes**: the diff file by file, numbered on both sides, each file's name pinned while you read it. Big and generated files (lockfiles, snapshots) start folded. Clicking a line opens the file there in your editor. Work waiting for review opens here.
+- **Talk to it**: what you type goes straight to the agent (tilde hears it too, and won't contradict you). When it's waiting on you, what you type answers it. A stopped agent picks its session back up. While it works, the button at the end of the field stops it.
+
+Agents and tilde write Markdown, and it reads as written: lists, code, tables. While an agent works, what it's doing now shimmers.
 
 Only the actions that fit where the job is:
 
 | While it's | You can |
 |---|---|
-| Working or waiting | Stop, take over, open in your editor |
-| Ready | Discard, take over, open in your editor, ask for (or open) its PR, **bring it in** (⌘↩) |
+| Working or waiting | Stop (in the field), take over, open in your editor |
+| Ready | Discard, take over, open in your editor, open its PR once there is one, **bring it in** (⌘↩); work done in place or in scratch is just **Done** |
 | Stopped or failed | Discard, take over, open in your editor, or tell it how to carry on |
 | Landed | Open its PR |
 

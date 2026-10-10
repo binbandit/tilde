@@ -25,26 +25,31 @@ struct JobFooter: View {
                 }
             }
             if job.phase != .landed {
-                AgentComposer(job: job, answering: model.question(for: job.id), problem: $problem)
-            }
-            HStack(spacing: 8) {
-                secondary
-                if let problem {
-                    Text(problem).font(.system(size: 12)).foregroundStyle(Theme.failed).lineLimit(2)
+                AgentComposer(job: job, answering: model.question(for: job.id), problem: $problem) {
+                    act(closing: false) { await model.stop(job) }
                 }
-                Spacer()
-                if busy { ProgressView().controlSize(.small) }
-                primary
+            }
+            if hasActions {
+                HStack(spacing: 8) {
+                    secondary
+                    if let problem {
+                        Text(problem).font(.system(size: 12)).foregroundStyle(Theme.failed).lineLimit(2)
+                    }
+                    Spacer()
+                    if busy { ProgressView().controlSize(.small) }
+                    primary
+                }
             }
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 16)
     }
 
+    /// Anything for the row under the composer: the work's own actions, or how one went.
+    private var hasActions: Bool { hasWorkdir || job.phase == .ready || job.phase == .landed || busy || problem != nil }
+
     @ViewBuilder private var secondary: some View {
-        if job.phase.isActive {
-            Button("Stop") { act(closing: false) { await model.stop(job) } }.buttonStyle(.outline(large: true))
-        } else if hasWorkdir, job.phase != .landed, job.isolation != .inPlace {
+        if hasWorkdir, !job.phase.isActive, job.phase != .landed, job.isolation != .inPlace {
             Button("Discard") { act { await model.discard(job.id) } }.buttonStyle(.outline(large: true, destructive: true))
         }
         if job.takeOverCommand != nil, hasWorkdir, job.phase != .landed {
@@ -55,7 +60,8 @@ struct JobFooter: View {
 
     @ViewBuilder private var primary: some View {
         switch job.phase {
-        case .ready where job.isolation == .scratch:
+        case .ready where job.isolation != .worktree:
+            // Scratch work has nothing to bring in, and work done in place is in already.
             Button("Done") { act { await model.dismiss(job.id) } }
                 .buttonStyle(.pill(Theme.ready, large: true))
                 .keyboardShortcut(.return, modifiers: .command)
@@ -95,17 +101,20 @@ struct JobFooter: View {
 }
 
 /// Talking to the agent directly. tilde hears it too. When the agent's waiting on an
-/// answer from you, what you type answers it, unless you say otherwise.
+/// answer from you, what you type answers it, unless you say otherwise. While it works,
+/// the button at the end stops it; once you've typed something, it sends.
 private struct AgentComposer: View {
     @Environment(AppModel.self) private var model
     var job: Job
     var answering: Attention?
     @Binding var problem: String?
+    var stop: () -> Void
     @State private var text = ""
     @State private var newMessage = false
     @FocusState private var focused: Bool
 
     private var question: Attention? { newMessage ? nil : answering }
+    private var typed: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     private var prompt: String {
         if question != nil { return "Your answer…" }
@@ -127,23 +136,42 @@ private struct AgentComposer: View {
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Theme.text3)
                 }
+                .padding(.top, 3)
+                .padding(.trailing, 5)
             }
-            TextField("", text: $text, prompt: Text(prompt).foregroundStyle(Theme.text3), axis: .vertical)
-                .textFieldStyle(.plain)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Theme.text)
-                .lineLimit(1...5)
-                .focused($focused)
-                .onSubmit(send)
+            HStack(alignment: .bottom, spacing: 10) {
+                TextField("", text: $text, prompt: Text(prompt).foregroundStyle(Theme.text3), axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1...5)
+                    .focused($focused)
+                    .onSubmit(send)
+                    .padding(.vertical, 3)
+                trailing
+            }
+            .frame(minHeight: 26)
+            .animation(Theme.quick, value: typed)
         }
-        .padding(.horizontal, 13)
-        .padding(.vertical, 11)
+        .padding(.leading, 13)
+        .padding(.trailing, 8)
+        .padding(.vertical, 8)
         .background(Theme.raised, in: .rect(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(focused ? Theme.line : .clear, lineWidth: 1))
         .contentShape(.rect)
         .onTapGesture { focused = true }
         .onAppear { focused = true }
         .onChange(of: answering?.id) { newMessage = false }
+    }
+
+    @ViewBuilder private var trailing: some View {
+        if typed {
+            ComposerButton(icon: "arrow.up", filled: true, help: question == nil ? "Send to \(job.harness.label)" : "Answer", action: send)
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
+        } else if job.phase.isActive {
+            ComposerButton(icon: "stop.fill", filled: false, help: "Stop \(job.harness.label)", action: stop)
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
+        }
     }
 
     private func send() {

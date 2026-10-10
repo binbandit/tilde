@@ -11,13 +11,14 @@ struct JobView: View {
     var height: CGFloat
     var onClose: () -> Void
     @State private var tab: Tab?
-    @State private var contentHeight: CGFloat = 0
+    /// Each tab's content height, kept apart so one on its way out can't size the other.
+    @State private var contentHeights: [Tab: CGFloat] = [:]
     @State private var headerHeight: CGFloat = 0
     @State private var footerHeight: CGFloat = 0
     @State private var chromeHeight: CGFloat = 0
 
     /// The body hugs what it shows, up to what the edge leaves room for.
-    private var bodyHeight: CGFloat { max(96, min(contentHeight, height - chromeHeight)) }
+    private var bodyHeight: CGFloat { max(96, min(contentHeights[shown] ?? 0, height - chromeHeight)) }
 
     enum Tab { case conversation, changes }
 
@@ -36,8 +37,8 @@ struct JobView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chrome(header: $0) }
             Group {
                 switch shown {
-                case .conversation: JobConversation(job: job, contentHeight: $contentHeight)
-                case .changes: JobChanges(job: job, contentHeight: $contentHeight)
+                case .conversation: JobConversation(job: job, contentHeight: contentHeight(.conversation))
+                case .changes: JobChanges(job: job, contentHeight: contentHeight(.changes))
                 }
             }
             .frame(height: bodyHeight)
@@ -57,6 +58,10 @@ struct JobView: View {
 }
 
 extension JobView {
+    private func contentHeight(_ tab: Tab) -> Binding<CGFloat> {
+        Binding { contentHeights[tab] ?? 0 } set: { contentHeights[tab] = $0 }
+    }
+
     /// The header's and footer's heights, which the body leaves room for.
     private func chrome(header: CGFloat? = nil, footer: CGFloat? = nil) {
         if let header { headerHeight = header }
@@ -80,7 +85,9 @@ private struct JobHeader: View {
             StatusDot(phase: job.phase, size: 10)
             VStack(alignment: .leading, spacing: 2) {
                 Text(job.title).font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
-                Meta(text: [job.projectName, job.branch, job.harness.label, job.elapsed].compactMap { $0 }.joined(separator: " · "))
+                TimelineView(.periodic(from: .now, by: 10)) { _ in
+                    Meta(text: [job.projectName, job.branch, job.harness.label, job.elapsed].compactMap { $0 }.joined(separator: " · "))
+                }
             }
             Spacer(minLength: 16)
             if job.hasChanges { Tabs(job: job, tab: $tab) }
@@ -149,6 +156,8 @@ private struct JobChanges: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0.rounded(.up) }
         }
         .scrollIndicators(.never)
+        // Starts at the top, and stays there as the diff loads in under it.
+        .defaultScrollAnchor(.top)
         // Fresh whenever the agent changes something.
         .task(id: job.diff) {
             patch = await model.diff(job.id)
@@ -164,8 +173,8 @@ struct DiffBadge: View {
     var body: some View {
         HStack(spacing: compact ? 4 : 6) {
             if !compact { Text("\(diff.files) file\(diff.files == 1 ? "" : "s")").foregroundStyle(Theme.text2) }
-            Text("+\(diff.insertions)").foregroundStyle(Theme.ready)
-            Text("−\(diff.deletions)").foregroundStyle(Theme.failed)
+            if diff.insertions > 0 || diff.deletions == 0 { Text("+\(diff.insertions)").foregroundStyle(Theme.ready) }
+            if diff.deletions > 0 { Text("−\(diff.deletions)").foregroundStyle(Theme.failed) }
         }
         .font(.system(size: compact ? 11 : 12, weight: .semibold, design: .rounded))
         .monospacedDigit()

@@ -46,7 +46,7 @@ final class MacPerception: Perception {
         let since = Date.now.addingTimeInterval(-hours * 3600)
         var totals: [String: TimeInterval] = [:]
         for span in spans + [current].compactMap({ $0 }) where span.end > since {
-            let key = [span.app, span.path.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? span.title.map(Titles.short)]
+            let key = [span.app, span.path.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? span.title.map { Titles.short($0, app: span.app) }]
                 .compactMap { $0 }.joined(separator: " · ")
             totals[key, default: 0] += span.end.timeIntervalSince(max(span.start, since))
         }

@@ -18,7 +18,7 @@ struct JobConversation: View {
                     view(for: row, after: index > 0 ? rows[index - 1] : nil, isLast: index == rows.count - 1,
                          isOpen: isOpen(rows[index...]))
                 }
-                if let live = liveLine { Working(text: live) }
+                if let live = liveLine(after: rows.last) { Working(text: live) }
             }
             .padding(22)
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0.rounded(.up) }
@@ -27,11 +27,14 @@ struct JobConversation: View {
         .defaultScrollAnchor(.bottom)
     }
 
-    /// While nothing new is on screen, what's happening anyway.
-    private var liveLine: String? {
+    /// While nothing new is on screen, what's happening anyway. A run of steps
+    /// at the end already shows what the agent is doing.
+    private func liveLine(after last: Row?) -> String? {
         switch job.phase {
         case .starting: "\(job.harness.label) is getting started"
         case .deciding: "tilde is looking at it"
+        case .working:
+            if case .steps? = last { nil } else { "\(job.harness.label) is working" }
         default: nil
         }
     }
@@ -117,11 +120,7 @@ private struct AgentWords: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             if let name { Meta(text: name, color: Theme.text3) }
-            Text(.init(text))
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.text)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
+            Prose(text: text)
         }
         .frame(maxWidth: 640, alignment: .leading)
     }
@@ -145,12 +144,14 @@ private struct Direction: View {
                     Meta(text: "\(entry.from == .you ? "You" : "tilde") to \(agent)\(isBrief ? ", the brief" : "")", color: Theme.text3)
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(.init(entry.text))
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.text)
-                        .lineLimit(long && !expanded ? 5 : nil)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                    Prose(text: entry.text, weight: .medium)
+                        .frame(maxHeight: long && !expanded ? 88 : nil, alignment: .top)
+                        .mask {
+                            LinearGradient(
+                                stops: [.init(color: .black, location: 0.6), .init(color: .black.opacity(long && !expanded ? 0 : 1), location: 1)],
+                                startPoint: .top, endPoint: .bottom)
+                        }
+                        .clipped()
                     if long {
                         Button(expanded ? "Show less" : "Show all") { withAnimation(Theme.quick) { expanded.toggle() } }
                             .buttonStyle(.plain)
@@ -182,7 +183,7 @@ private struct Steps: View {
                         .rotationEffect(.degrees(expanded ? 90 : 0))
                     Text(steps.count == 1 ? "1 step" : "\(steps.count) steps").fontWeight(.semibold)
                     if !expanded, let last = steps.last {
-                        Text(last.text).foregroundStyle(live ? Theme.text2 : Theme.text3).lineLimit(1)
+                        Text(last.text).foregroundStyle(live ? Theme.text2 : Theme.text3).lineLimit(1).shimmering(live)
                     }
                 }
                 .font(.system(size: 12))
@@ -249,9 +250,6 @@ private struct Working: View {
     var text: String
 
     var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.mini)
-            Text(text).font(.system(size: 12)).foregroundStyle(Theme.text3)
-        }
+        Text(text).font(.system(size: 12)).foregroundStyle(Theme.text3).shimmering()
     }
 }

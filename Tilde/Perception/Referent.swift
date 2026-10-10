@@ -57,7 +57,7 @@ enum Pointing {
         var document = window.flatMap { string($0, kAXDocumentAttribute) }.flatMap(path(fromURL:))
         var frame = window.flatMap(frameOf) ?? .zero
         let name = app.localizedName ?? "App"
-        var label = [windowTitle.map { Titles.short($0) }, name].compactMap { $0 }.joined(separator: " · ")
+        var label = [windowTitle.map { Titles.short($0, app: name) }, name].compactMap { $0 }.joined(separator: " · ")
         var selection: String?
 
         // A file under the cursor (Finder, open panels, sidebars).
@@ -177,9 +177,14 @@ enum Repos {
 }
 
 enum Titles {
-    /// Window titles can be long ("ContentView.swift — paradise — Edited"); keep the meaningful head.
-    static func short(_ title: String) -> String {
-        let head = title.components(separatedBy: " — ").first ?? title
+    /// Window titles can be long ("ContentView.swift", a dash, "paradise", a dash, "Edited"); keep the
+    /// meaningful head. Browsers end theirs with their own name ("Inbox - Google Chrome - Work"),
+    /// which the label already says.
+    static func short(_ title: String, app: String? = nil) -> String {
+        var head = title.components(separatedBy: " \u{2014} ").first ?? title
+        if let app, let suffix = [" - \(app)", " \u{2013} \(app)"].lazy.compactMap({ head.range(of: $0) }).first {
+            head = String(head[..<suffix.lowerBound])
+        }
         return head.count > 40 ? String(head.prefix(39)) + "…" : head
     }
 }

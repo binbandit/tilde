@@ -11,15 +11,17 @@ struct QuestionOptions: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
+            // Why tilde picked what it picked, marked in its amber.
             if let detail = item.detail, !detail.isEmpty {
-                Text(detail)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Theme.text2)
-                    .lineLimit(3)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Theme.raised, in: .rect(cornerRadius: 8))
+                HStack(spacing: 9) {
+                    Capsule().fill(Theme.amber.opacity(0.55)).frame(width: 2)
+                    Text(detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.text2)
+                        .lineLimit(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 1)
             }
             HStack(spacing: 6) {
                 ForEach(Array(item.options.enumerated()), id: \.offset) { index, option in
