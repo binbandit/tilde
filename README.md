@@ -24,6 +24,7 @@ It isn't an app. There's no window, no Dock icon, no menu-bar item. tilde lives 
 
 ```sh
 just run        # generate the Xcode project, build, launch
+just install    # build and install in /Applications (or: just install ~/Applications)
 just test       # the brain's unit tests (Packages/TildeKit)
 just smoke ~/some/scratch/repo "add a CONTRIBUTING.md"   # headless end-to-end run
 just show inlet "?mode=open"   # any surface, any state, with fixture data

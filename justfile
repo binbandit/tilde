@@ -11,6 +11,10 @@ gen:
 build: gen
     xcodebuild -project Tilde.xcodeproj -scheme Tilde -configuration Debug -derivedDataPath {{derived}} -destination 'platform=macOS' build -quiet
 
+# Build and install the app: just install [destination]
+install destination="/Applications": build
+    ditto "{{app}}" "{{destination}}/tilde.app"
+
 # Build and (re)launch the app
 run: build
     -pkill -x tilde
