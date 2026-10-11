@@ -150,16 +150,14 @@ extension Conductor {
             if let target = target(of: taps), let i = thread.firstIndex(where: { $0.id == target }), thread[i].streaming {
                 thread[i].activity = text
             }
-        case .replyDone(let taps, let text):
+        case .replyDone(let taps, let text, let said):
             if let last = gather(taps) { writeReply(last, text, done: true) }
             if let replying, taps.contains(replying) { self.replying = nil }
             // Answers were already reflected on, with the question's options.
             let answers = taps.allSatisfy(answerTaps.contains)
             answerTaps.subtract(taps)
-            Task {
-                if let transcript = await manager.takeTranscript(), !answers {
-                    await scribe.reflect(on: "\(Owner.firstName): \(transcript.said)\ntilde: \(transcript.replied)")
-                }
+            if !answers, !said.isEmpty, !text.isEmpty {
+                Task { await scribe.reflect(on: "\(Owner.firstName): \(said)\ntilde: \(text)") }
             }
         case .undelivered(let taps, let reason):
             // Never reached the model: each says so under your words, with Try again.

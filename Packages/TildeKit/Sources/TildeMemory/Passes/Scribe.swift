@@ -35,6 +35,7 @@ public actor Scribe {
             queue = []
             if let ops = await extract(from: exchange) {
                 let written = await apply(ops)
+                Log.info("scribe", "kept \(written.count) of \(ops.remember.count), forgot \(ops.forget.count)")
                 if !written.isEmpty { emit.yield(written) }
             }
         }
@@ -87,9 +88,13 @@ public actor Scribe {
             let reply = try await model.run(ModelPass(
                 instructions: Self.instructions(owner: Owner.firstName), prompt: prompt, workdir: memory.notebook.path,
                 outputSchema: Self.schema))
-            guard let text = reply.text, let data = text.data(using: .utf8) else { return nil }
+            guard let text = reply.text, let data = text.data(using: .utf8) else {
+                Log.info("scribe", "no answer from the model (ok: \(reply.ok))")
+                return nil
+            }
             return try JSONDecoder().decode(Ops.self, from: data)
         } catch {
+            Log.info("scribe", "couldn't reflect: \(error)")
             return nil
         }
     }

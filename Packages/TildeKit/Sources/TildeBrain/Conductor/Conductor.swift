@@ -133,6 +133,8 @@ public final class Conductor {
             }
         }
         Task { await dreamer.catchUp() }
+        // A notebook that knows nothing of its owner starts with the first meeting, as promised.
+        if isFirstMeeting { Task { await introduce() } }
         if initiativeEnabled { Task { await watch() } }
         Task { [weak self] in
             guard let outputs = self?.manager.outputs else { return }

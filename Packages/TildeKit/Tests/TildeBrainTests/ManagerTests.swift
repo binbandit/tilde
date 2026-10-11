@@ -30,7 +30,7 @@ import WorkerKit
         var read: [String] = []
         for await output in manager.outputs {
             if case .read(let taps) = output { read += taps }
-            if case .replyDone(let taps, let text) = output { answer = (taps, text); break }
+            if case .replyDone(let taps, let text, _) = output { answer = (taps, text); break }
         }
         #expect(read == ["t-1"])
         #expect(answer?.0 == ["t-1"])

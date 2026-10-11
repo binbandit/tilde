@@ -29,7 +29,8 @@ public actor Manager: CodexHost {
     public enum Output: Sendable {
         /// Streaming reply text for the taps that started this turn.
         case reply(taps: [String], text: String)
-        case replyDone(taps: [String], text: String)
+        /// The turn's reply is done; `said` is what its taps said, for the scribe.
+        case replyDone(taps: [String], text: String, said: String)
         /// What the turn is doing right now ("Checking GitHub"), for the taps waiting on it.
         case activity(taps: [String], text: String)
         /// The model has these taps now: everything said in the running turn, the latest last.
@@ -74,7 +75,8 @@ public actor Manager: CodexHost {
     private var turn: [String]?
     private var streaming = ""
     private var replyText = ""
-    private var lastTurn: Transcript?
+    /// What Brayden said in the running turn, for the scribe.
+    private var said = ""
     private var turnStarted = Date.now
     /// Everything the running turn was asked, to ask a fresh thread again if it comes to that.
     private var asked = ""
@@ -85,12 +87,6 @@ public actor Manager: CodexHost {
     private var retrying = false
     /// Counts turns, so a watchdog only ever watches its own.
     private var generation = 0
-
-    /// What happened in a tap turn, for the scribe.
-    public struct Transcript: Sendable {
-        public var said: String
-        public var replied: String
-    }
 
     public init(memory: Memory, tools: Toolset, config: Config = Config()) {
         self.memory = memory
@@ -123,7 +119,7 @@ public actor Manager: CodexHost {
         emit.yield(.read(taps: turn ?? [tap]))
         asked += "\n\n" + text
         streaming = ""
-        lastTurn = Transcript(said: [lastTurn?.said, message.text].compactMap { $0 }.joined(separator: "\n"), replied: "")
+        said = [said, message.text].filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
     private func requeue(_ message: Message) {
@@ -154,8 +150,7 @@ public actor Manager: CodexHost {
         turn = batch.compactMap(\.tap)
         streaming = ""
         replyText = ""
-        lastTurn = turn!.isEmpty ? nil : Transcript(
-            said: batch.filter { $0.tap != nil }.map(\.text).joined(separator: "\n"), replied: "")
+        said = batch.filter { $0.tap != nil }.map(\.text).joined(separator: "\n")
         Task { await self.send(batch) }
     }
 
@@ -260,19 +255,10 @@ public actor Manager: CodexHost {
     private func endTurn() {
         Log.info("manager", "turn done in \(String(format: "%.1f", Date.now.timeIntervalSince(turnStarted)))s: \(replyText.clipped(to: 200))")
         let taps = turn ?? []
-        if !taps.isEmpty {
-            emit.yield(.replyDone(taps: taps, text: replyText))
-            lastTurn?.replied = replyText
-        }
+        if !taps.isEmpty { emit.yield(.replyDone(taps: taps, text: replyText, said: said)) }
+        said = ""
         turn = nil
         pump()
-    }
-
-    /// The last tap turn, once, for the scribe.
-    public func takeTranscript() -> Transcript? {
-        guard turn == nil, let transcript = lastTurn, !transcript.replied.isEmpty else { return nil }
-        lastTurn = nil
-        return transcript
     }
 
     private func ensureSession() async throws -> CodexSession {
