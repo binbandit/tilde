@@ -12,6 +12,7 @@ printf '[]' > "$shutdown_state"
 lifecycle="$(dirname -- "${BASH_SOURCE[0]}")/tilde-lifecycle.js"
 stage=
 permission_denied=false
+can_restart_previous=true
 
 cleanup_stage() {
     if [[ -n "$stage" ]]; then
@@ -73,12 +74,21 @@ install_to() {
         printf 'Could not launch %s; attempting to restore the previous installation\n' "$target" >&2
         # A failed launch may still have started a process. Stop verified app
         # instances again before moving the new bundle out of the way.
-        if ! osascript -l JavaScript "$lifecycle" stop "$shutdown_state"; then
-            printf 'Previous app retained at %s\n' "$previous" >&2
+        if ! osascript -l JavaScript "$lifecycle" stop-cleanup "$shutdown_state"; then
+            can_restart_previous=false
+            printf 'The new installation remains at %s\n' "$target" >&2
+            if [[ -e "$previous" || -L "$previous" ]]; then printf 'Previous app retained at %s\n' "$previous" >&2; fi
+            return 1
+        fi
+        if ! mv -- "$target" "$stage/tilde.app"; then
+            can_restart_previous=false
+            printf 'Could not remove the failed new installation at %s\n' "$target" >&2
+            if [[ -e "$previous" || -L "$previous" ]]; then printf 'Previous app retained at %s\n' "$previous" >&2; fi
             return 1
         fi
         if [[ -e "$previous" || -L "$previous" ]]; then
-            if ! mv -- "$target" "$stage/tilde.app" || ! mv -- "$previous" "$target"; then
+            if ! mv -- "$previous" "$target"; then
+                can_restart_previous=false
                 printf 'Restore failed; previous app retained at %s\n' "$previous" >&2
             fi
         fi
@@ -98,5 +108,9 @@ if [[ -n "$fallback" && "$permission_denied" == true ]]; then
     permission_denied=false
     install_to "$fallback" && exit 0
 fi
-osascript -l JavaScript "$lifecycle" recover "$shutdown_state" || printf 'Could not restart every previous tilde instance\n' >&2
+if [[ "$can_restart_previous" == true ]]; then
+    osascript -l JavaScript "$lifecycle" recover "$shutdown_state" || printf 'Could not restart every previous tilde instance\n' >&2
+else
+    printf 'Automatic restart skipped because rollback could not finish\n' >&2
+fi
 exit 1

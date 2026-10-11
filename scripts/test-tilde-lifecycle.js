@@ -74,6 +74,12 @@ function run(argv) {
     throws(function() { stopTilde(unsaved); }, 'cannot save');
     assert(untouched.quits === 0, 'Save recovery state before stopping anything');
 
+    var cleanupApp = app('/new/tilde.app', 'normal');
+    var cleanup = runtime([cleanupApp]);
+    cleanup.remember = function() { throw new Error('cleanup must not change recovery state'); };
+    stopTilde(cleanup, false);
+    assert(cleanupApp.quits === 1, 'Launch cleanup stops the new app without changing original recovery state');
+
     var recovery = runtime([app('/running/tilde.app', 'normal')]);
     recoverTilde(['/running/tilde.app', '/old/tilde.app', '/old/tilde.app'], recovery);
     assert(recovery.opened.length === 1 && recovery.opened[0] === '/old/tilde.app', 'Recover the exact old path once, without duplicating running apps');

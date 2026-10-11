@@ -20,9 +20,11 @@ function waitForShutdown(applications, seconds, runtime) {
     return true;
 }
 
-function stopTilde(runtime) {
+function stopTilde(runtime, remember) {
     var applications = runningTilde(runtime);
-    runtime.remember(applications.map(function(application) { return application.bundlePath; }));
+    if (remember !== false) {
+        runtime.remember(applications.map(function(application) { return application.bundlePath; }));
+    }
     applications.forEach(function(application) { application.terminate(); });
     if (!waitForShutdown(applications, 10, runtime)) {
         applications.filter(function(application) { return !application.isTerminated(); })
@@ -121,8 +123,9 @@ function run(arguments) {
     if (mode === 'list' && arguments.length === 1) {
         return JSON.stringify(runningTilde(runtime).map(function(application) { return application.bundlePath; }));
     }
-    if (arguments.length !== 2) throw new Error('Usage: tilde-lifecycle.js stop|recover STATE, or list');
+    if (arguments.length !== 2) throw new Error('Usage: tilde-lifecycle.js stop|stop-cleanup|recover STATE, or list');
     if (mode === 'stop') stopTilde(runtime);
+    else if (mode === 'stop-cleanup') stopTilde(runtime, false);
     else if (mode === 'recover') recoverTilde(readState(), runtime);
     else throw new Error('Unknown lifecycle operation');
 }
