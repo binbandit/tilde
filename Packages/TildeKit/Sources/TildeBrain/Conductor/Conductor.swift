@@ -59,6 +59,10 @@ public final class Conductor {
     @ObservationIgnored var threadDay = Date.now
     /// What you said, by the id of tilde's reply to it, until tilde has it.
     @ObservationIgnored var unread: [String: (message: String, context: TapContext)] = [:]
+    /// Replies to your answers: shown while tilde writes, and gone if it has nothing to add.
+    @ObservationIgnored var optionalReplies: Set<String> = []
+    /// Turns carrying your answers, whose exchange the scribe has already seen.
+    @ObservationIgnored var answerTaps: Set<String> = []
 
     public struct Config: Sendable {
         public var manager = Manager.Config()

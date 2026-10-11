@@ -183,6 +183,38 @@ final class LaunchLog: Sendable {
         #expect(conductor.thread[0].delivery == .sent && conductor.thread[0].pointing == "oh-fx · Ghostty")
     }
 
+    @Test(.timeLimit(.minutes(1))) func whatYouSayMidTurnJoinsItAndGetsOneReply() async throws {
+        var config = config
+        config.initiative = false
+        let methods = root.appending(path: "methods.txt")
+        config.manager.executable = try fakeManager(writingTo: methods)
+        config.manager.stallAfter = 1
+        let conductor = try Conductor(home: TildeHome(root: root.appending(path: "home")), config: config)
+        try await conductor.start()
+
+        // The first turn hangs, and a second later the same thread is asked to carry on.
+        conductor.tap("first")
+        for _ in 0..<200 where !(((try? String(contentsOf: methods, encoding: .utf8)) ?? "").components(separatedBy: "turn/start").count == 3) {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        conductor.tap("second")
+        try await waitFor(conductor) { conductor.thread.last?.streaming == false }
+
+        #expect(conductor.thread.map(\.from) == [.you, .you, .tilde])
+        #expect(conductor.thread.last?.text.hasPrefix("You said") == true)
+        #expect(conductor.thread.prefix(2).allSatisfy { if case .read = $0.delivery { true } else { false } })
+    }
+
+    /// Stands in for `codex` with the fixture that hangs its first turn (Fixtures/fake_manager.py).
+    private func fakeManager(writingTo out: URL) throws -> String {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "Fixtures/fake_manager.py").path
+        let path = root.appending(path: "codex").path
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try "#!/bin/sh\nFAKE_OUT='\(out.path)' exec /usr/bin/python3 -I '\(fixture)'\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path)
+        return path
+    }
+
     @Test func scratchJobsNeedNoRepo() async throws {
         let conductor = try await makeConductor()
         let started = await call(conductor, "delegate", ["title": "Check the app", "brief": "Look at it", "harness": "scripted"])

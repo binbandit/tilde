@@ -20,7 +20,7 @@ extension Conductor {
             "Start a worker. With a project it works in its own git worktree; without one (GUI work, research) it gets a scratch folder. Returns the job id.",
             schema: AgentTool.object([
                 "project_path": .text("Absolute path of the project's git repo. Omit for work that isn't about a repo."),
-                "title": .text("2 to 4 words naming the job, e.g. 'Navigation bar'."),
+                "title": .text("2 to 5 words naming the job the way a person would, e.g. 'Navigation bar', 'oh-fx#799 conflicts'. Not 'Fix PRs 796 799'."),
                 "brief": .text("The full brief for the worker."),
                 "harness": [
                     "type": "string", "enum": .array(HarnessCatalog.installed().map { .string($0.id.rawValue) }),

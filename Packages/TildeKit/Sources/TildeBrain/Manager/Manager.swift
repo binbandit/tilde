@@ -30,7 +30,7 @@ public actor Manager: CodexHost {
         case replyDone(taps: [String], text: String)
         /// What the turn is doing right now ("Checking GitHub"), for the taps waiting on it.
         case activity(taps: [String], text: String)
-        /// The model has these taps now, in a turn or steered into one.
+        /// The model has these taps now: everything said in the running turn, the latest last.
         case read(taps: [String])
         case trouble(String)
     }
@@ -114,8 +114,8 @@ public actor Manager: CodexHost {
         }
         guard turn != nil else { return requeue(message) }
         Log.info("manager", "steered in: \(message.text.clipped(to: 200))")
-        emit.yield(.read(taps: [tap]))
         turn?.append(tap)
+        emit.yield(.read(taps: turn ?? [tap]))
         asked += "\n\n" + text
         streaming = ""
         lastTurn = Transcript(said: [lastTurn?.said, message.text].compactMap { $0 }.joined(separator: "\n"), replied: "")

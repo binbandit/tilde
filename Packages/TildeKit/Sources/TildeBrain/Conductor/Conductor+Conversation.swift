@@ -83,7 +83,20 @@ extension Conductor {
             if !forwarded { record(jobID, .you, .decision, "answered tilde: \(reply)") }
         }
         if let i = thread.firstIndex(where: { $0.attentionID == item.id }) { thread[i].attentionID = nil }
-        append(Message(from: .you, text: reply + (always ? " (always)" : ""), jobs: item.jobID.map { [$0] } ?? []))
+        // Your answer is a message like any other: tilde reads it and says what happens now. An answer
+        // that went straight to an agent usually needs no word, so its reply only appears if there is one.
+        let id = IDs.make("t")
+        var said = Message(from: .you, text: reply + (always ? " (always)" : ""), jobs: item.jobID.map { [$0] } ?? [])
+        said.delivery = .sent
+        unread[id] = (said.id, TapContext(jobID: item.jobID))
+        append(said)
+        if forwarded {
+            quietTaps.insert(id)
+        } else {
+            optionalReplies.insert(id)
+            append(Message(id: id, from: .tilde, text: "", streaming: true))
+            replying = id
+        }
 
         let tag = "<answer to=\"\(item.id)\"\(item.jobID.map { " job=\"\($0)\"" } ?? "")\(forwarded ? " delivered-to-worker=\"yes\"" : "")>"
         Task {
@@ -93,8 +106,9 @@ extension Conductor {
             await manager.post(.init(
                 "\(tag)\nQuestion: \(item.question)\n" + context.compactMap { $0 }.map { "\($0)\n" }.joined()
                     + "Answer: \(reply)\(always ? "\n(They asked to always do this.)" : "")\n</answer>",
-                jobs: item.jobID.map { [$0] } ?? []))
+                tap: id, jobs: item.jobID.map { [$0] } ?? []))
         }
+        answerTaps.insert(id)
         Task {
             await scribe.reflect(on: "tilde asked \(Owner.firstName): \(item.question) Options: \(item.options.joined(separator: " / ")).\n\(Owner.firstName) answered: \(reply)\(always ? " (always)" : "")")
         }
@@ -118,22 +132,24 @@ extension Conductor {
     func handle(_ output: Manager.Output) {
         switch output {
         case .reply(let taps, let text):
-            for tap in taps { writeReply(tap, text, done: false) }
+            if let last = gather(taps) { writeReply(last, text, done: false) }
         case .read(let taps):
             for tap in taps {
                 guard let said = unread.removeValue(forKey: tap)?.message, let i = thread.firstIndex(where: { $0.id == said }) else { continue }
                 thread[i].delivery = .read(.now)
             }
+            _ = gather(taps)
             saveThread()
         case .activity(let taps, let text):
-            for tap in taps {
-                if let i = thread.firstIndex(where: { $0.id == tap }), thread[i].streaming { thread[i].activity = text }
-            }
+            if let last = taps.last, let i = thread.firstIndex(where: { $0.id == last }), thread[i].streaming { thread[i].activity = text }
         case .replyDone(let taps, let text):
-            for tap in taps { writeReply(tap, text, done: true) }
+            if let last = gather(taps) { writeReply(last, text, done: true) }
             replying = nil
+            // Answers were already reflected on, with the question's options.
+            let answers = taps.allSatisfy(answerTaps.contains)
+            answerTaps.subtract(taps)
             Task {
-                if let transcript = await manager.takeTranscript() {
+                if let transcript = await manager.takeTranscript(), !answers {
                     await scribe.reflect(on: "\(Owner.firstName): \(transcript.said)\ntilde: \(transcript.replied)")
                 }
             }
@@ -204,6 +220,23 @@ extension Conductor {
     private func saveThread() { threads.save(thread) }
 
     /// Streams a reply into its message. Quiet taps (welcome-backs) only appear if tilde says something.
+    /// One reply answers everything said in a turn, under the last of it: earlier replies still
+    /// waiting to be written go, and any already under way stop there. Returns the one to write to.
+    private func gather(_ taps: [String]) -> String? {
+        for tap in taps.dropLast() {
+            optionalReplies.remove(tap)
+            guard let i = thread.firstIndex(where: { $0.id == tap }), thread[i].streaming else { continue }
+            if thread[i].text.isEmpty {
+                thread.remove(at: i)
+            } else {
+                thread[i].streaming = false
+                thread[i].activity = nil
+            }
+        }
+        if let last = taps.last, replying.map(taps.contains) ?? false { replying = last }
+        return taps.last
+    }
+
     private func writeReply(_ tap: String, _ text: String, done: Bool) {
         if quietTaps.contains(tap), thread.firstIndex(where: { $0.id == tap }) == nil {
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -217,8 +250,15 @@ extension Conductor {
         if done {
             thread[i].streaming = false
             thread[i].activity = nil
-            if thread[i].text.isEmpty { thread[i].text = thread[i].jobs.isEmpty ? "Done." : "On it." }
+            if thread[i].text.isEmpty {
+                if optionalReplies.contains(tap) {
+                    thread.remove(at: i)
+                } else {
+                    thread[i].text = thread[i].jobs.isEmpty ? "Done." : "On it."
+                }
+            }
             quietTaps.remove(tap)
+            optionalReplies.remove(tap)
             saveThread()
         }
     }
