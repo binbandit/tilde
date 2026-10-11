@@ -77,7 +77,7 @@ struct TildeWords: View {
                 }
             }
             if let id = message.attentionID, let item = model.attention.first(where: { $0.id == id }) {
-                QuestionOptions(item: item)
+                QuestionOptions(item: item, acceptsReturn: model.openQuestion?.id == id)
             }
             if let settled = message.settled {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {

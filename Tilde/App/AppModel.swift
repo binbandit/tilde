@@ -20,6 +20,8 @@ final class AppModel {
     var draft = ""
     /// You held the key to talk, but tilde isn't allowed to hear you.
     var cantHear = false
+    /// You held the key to talk, and nothing was heard.
+    var missedYou = false
 
     struct Listening: Equatable {
         var transcript = ""
@@ -50,7 +52,11 @@ final class AppModel {
     var jobs: [Job] { fixture?.jobs ?? conductor?.jobs ?? [] }
     var attention: [Attention] { fixture?.attention ?? conductor?.attention ?? [] }
 
-    var openJobs: [Job] { jobs.filter(\.phase.isOpen).sorted { $0.createdAt < $1.createdAt } }
+    /// The jobs to keep in view: open ones, and failed ones whose work is still there to look at or clear.
+    var crew: [Job] {
+        jobs.filter { $0.phase.isOpen || ($0.phase == .failed && FileManager.default.fileExists(atPath: $0.workdir)) }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
 
     func job(_ id: String?) -> Job? { id.flatMap { id in jobs.first { $0.id == id } } }
 

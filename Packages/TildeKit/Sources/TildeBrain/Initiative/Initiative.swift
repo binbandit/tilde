@@ -49,11 +49,16 @@ public actor Initiative {
     var waiting: [AgentWatch.Waiting] = []
     /// The sessions of tilde's own jobs, which aren't the owner's agents to be reminded of.
     var ownSessions: Set<String> = []
+    /// The owner's checkouts, to find a PR's by its repo.
+    let projects: ProjectIndex?
+    /// A checkout path by owner/repo, for the PRs watched this poll.
+    var checkouts: [String: String] = [:]
     /// One background review at a time.
     var reviewing = false
 
-    public init(home: TildeHome, review: any MemoryModel = CodexReviewModel()) {
+    public init(home: TildeHome, review: any MemoryModel = CodexReviewModel(), projects: ProjectIndex? = nil) {
         self.home = home
+        self.projects = projects
         notebook = Notebook(url: home.notebook)
         reviewModel = review
         seen = (try? Data(contentsOf: home.state.appending(path: "initiative.json")))
@@ -109,6 +114,9 @@ public actor Initiative {
     public func look(jobs: [Job], focusedRepo: String?) async -> [Notice] {
         var found: [Notice] = []
         if Date.now.timeIntervalSince(polledAt) > 180, let fresh = await PullRequestWatch.fetch() {
+            for repo in Set(fresh.map(\.repo)) where checkouts[repo] == nil {
+                checkouts[repo] = await projects?.checkout(of: repo)?.path
+            }
             found += saw(fresh)
         }
         found += nudges(pulls, focusedRepo: focusedRepo)

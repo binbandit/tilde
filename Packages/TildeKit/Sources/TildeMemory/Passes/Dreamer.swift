@@ -25,30 +25,37 @@ public actor Dreamer {
         self.evidence = evidence
     }
 
-    /// Dreams about yesterday if that hasn't happened yet (and it's past 4am).
+    /// Dreams about every day since the last one dreamt (up to a week back), once it's past 4am. A day
+    /// whose dream fails is tried again next time rather than skipped.
     public func catchUp(now: Date = .now) async {
         let calendar = Calendar.current
         guard !running, calendar.component(.hour, from: now) >= 4,
             let yesterday = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now)),
-            lastDreamt.map({ $0 < yesterday }) ?? true
+            let weekAgo = calendar.date(byAdding: .day, value: -6, to: yesterday)
         else { return }
-        await dream(about: yesterday)
+        let after = lastDreamt.flatMap { calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: $0)) } ?? yesterday
+        var day = max(after, weekAgo)
+        while day <= yesterday, await dream(about: day), let next = calendar.date(byAdding: .day, value: 1, to: day) {
+            day = next
+        }
     }
 
-    /// Consolidates one day into the notebook.
-    public func dream(about day: Date) async {
+    /// Consolidates one day into the notebook. Returns whether it's done (a day with nothing to dream about is).
+    @discardableResult
+    public func dream(about day: Date) async -> Bool {
         running = true
         defer { running = false }
         let evidence = await evidence(day)
         guard !evidence.isEmpty else {
             lastDreamt = day
-            return
+            return true
         }
         Log.info("dream", "dreaming about \(Notebook.journalName(for: day)) (\(evidence.count) chars of evidence)")
 
-        await run(evidence, instructions: Self.instructions(owner: Owner.firstName, day: day),
-                  commit: "dream about \(day.day)")
+        guard await run(evidence, instructions: Self.instructions(owner: Owner.firstName, day: day), commit: "dream about \(day.day)")
+        else { return false }
         lastDreamt = day
+        return true
     }
 
     // MARK: First meeting
@@ -63,7 +70,8 @@ public actor Dreamer {
     }
 
     /// One editing pass over the notebook with `evidence` as the prompt.
-    private func run(_ evidence: String, instructions: String, commit: String) async {
+    @discardableResult
+    private func run(_ evidence: String, instructions: String, commit: String) async -> Bool {
         let rules = memory.notebook.read("rules.md")
         do {
             // It may read anywhere to learn a project; it writes only the notebook.
@@ -74,9 +82,11 @@ public actor Dreamer {
                 await memory.refresh()
                 await memory.notebook.commitChanges(context: commit)
             }
+            return reply.ok
         } catch {
             keep(rules, after: commit)
             Log.info("dream", "\(commit) failed: \(error)")
+            return false
         }
     }
 

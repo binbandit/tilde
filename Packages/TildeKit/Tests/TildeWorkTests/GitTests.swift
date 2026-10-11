@@ -78,3 +78,12 @@ import WorkerKit
         #expect(await Git.freeBranch(repo: repo, slug: "nav") == "tilde/nav-2")
     }
 }
+
+@Suite struct ProjectRemoteTests {
+    @Test func checkoutsAreKnownByWhereOriginPoints() {
+        #expect(ProjectIndex.remote(fromURL: "git@github.com:binbandit/oh-fx.git") == "binbandit/oh-fx")
+        #expect(ProjectIndex.remote(fromURL: "https://github.com/binbandit/paradise.git") == "binbandit/paradise")
+        #expect(ProjectIndex.remote(fromURL: "https://github.com/maximhq/bifrost") == "maximhq/bifrost")
+        #expect(ProjectIndex.remote(fromURL: "nonsense") == nil)
+    }
+}

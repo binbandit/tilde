@@ -31,6 +31,11 @@ struct Composer: View {
                 }
                 .padding(.top, 3)
             }
+            if model.missedYou {
+                Text("Didn't catch that. Type it, or hold the key and try again.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.text2)
+                    .padding(.top, 3)
+            }
             if let answering {
                 HStack(spacing: 6) {
                     Text("Answering").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.amber)
@@ -78,6 +83,8 @@ struct Composer: View {
             hasFocus = true
         }
         .onAppear { if focused { hasFocus = true } }
+        .onDisappear { model.missedYou = false }
+        .onChange(of: model.draft) { if !model.draft.isEmpty { model.missedYou = false } }
         .onChange(of: focused) { _, now in if now { hasFocus = true } }
         .onChange(of: model.openQuestion?.id) { newMessage = false }
     }

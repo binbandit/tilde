@@ -24,12 +24,22 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     /// for when you've stepped away, so nothing waits on you unseen.
     func handle(_ signal: Conductor.Signal) {
         switch signal {
-        case .asked(let item): if Self.isAway { post(item) }
+        case .asked(let item): if Self.isAway { post(item) } else { remindLater(item) }
         case .resolved(let id): center.removeDeliveredNotifications(withIdentifiers: [id])
         case .said(let text, let jobID): if Self.isAway { say(text, jobID: jobID) }
         // A reply you walked away from waits for you like a text would.
         case .replied(let text): if Self.isAway { say(text, jobID: nil) }
         case .noted, .jobChanged, .trouble: break
+        }
+    }
+
+    /// A question still unanswered after a few minutes reaches you anyway: its peek may have come and gone on a
+    /// screen you weren't looking at.
+    private func remindLater(_ item: Attention) {
+        Task {
+            try? await Task.sleep(for: .seconds(300))
+            guard model.attention.contains(where: { $0.id == item.id }) else { return }
+            post(item)
         }
     }
 

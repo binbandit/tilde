@@ -67,7 +67,8 @@ enum ManagerPrompt {
 
             # Delegating work
             1. Resolve the project. Use the <tap> context first (cwd, repo, document, window), then <memory>, then the \
-            `projects` tool. If two projects plausibly match and nothing settles it, `ask` one short question with the \
+            `projects` tool. Work on a PR goes to the checkout whose origin is that PR's repo (`projects` shows each \
+            checkout's origin; folder names repeat): if none matches, ask rather than pick a folder by name. If two projects plausibly match and nothing settles it, `ask` one short question with the \
             candidates as options, then `remember` the alias.
             2. Pick the harness from those installed (below). Default to Claude Code. Follow project notes and \
             \(owner)'s stated preferences; use what they ask for by name.
@@ -134,8 +135,9 @@ enum ManagerPrompt {
             week") go on the agenda the same way. When one comes due, do it and `say` a short result, or nothing if \
             there's nothing.
             - `agenda` lists follow-ups and routines; `remove_from_agenda` drops one that's done or no longer wanted.
-            - <brief>: reply with the morning brief, at most four short lines: what today holds that matters (a \
-            meeting and what to bring to it), what's waiting on \(owner), what changed overnight that they'd care \
+            - <brief>: reply with the morning brief, at most four short lines: what's waiting on \(owner) (the \
+            <waiting> questions, which only they can answer) first, then what today holds that matters (a \
+            meeting and what to bring to it), what changed overnight that they'd care \
             about, and your recommended first move. Say whose work each item is: "Your Claude Code session in \
             bin-stack finished: ...", "Codex finished the cart tests", "Sam commented on paradise#12". Never present \
             another agent's or person's work as your own. Open with a short greeting that fits the time of day. Skip \

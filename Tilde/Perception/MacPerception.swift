@@ -71,7 +71,7 @@ final class MacPerception: Perception {
         else { return }
         let name = app.localizedName ?? "App"
         let window = Pointing.focusedWindow(app.processIdentifier)
-        let title = window.flatMap { Pointing.string($0, kAXTitleAttribute) }
+        let title = WorkTitles.keep(window.flatMap { Pointing.string($0, kAXTitleAttribute) }, bundle: app.bundleIdentifier)
         var path = window.flatMap { Pointing.string($0, kAXDocumentAttribute) }.flatMap(Pointing.path(fromURL:))
         if path == nil, let bundle = app.bundleIdentifier, Pointing.terminals.contains(bundle) {
             path = Shells.cwd(forTerminal: app.processIdentifier, title: title)

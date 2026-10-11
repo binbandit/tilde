@@ -23,7 +23,10 @@ extension Conductor {
             let id = IDs.make("t")
             quietTaps.insert(id)
             if replying == nil { replying = id }
+            // What's waiting on them leads: it's the one thing nobody else can do.
+            let waiting = attention.map { "- \($0.question)" + ($0.jobID.flatMap { self.job($0) }.map { " (\($0.title))" } ?? "") }
             let sections = [
+                ("waiting", waiting.joined(separator: "\n")),
                 ("schedule", inputs.schedule), ("overnight", overnight.joined(separator: "\n")),
                 ("today", today.map { "- \($0)" }.joined(separator: "\n")), ("noticed", Self.describe(noticed)),
             ]

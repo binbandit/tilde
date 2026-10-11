@@ -106,19 +106,9 @@ extension Initiative {
         }
     }
 
+    /// The owner's checkout of the PR's repo: found by its remote, not its folder name (several folders can
+    /// share a name, and the wrong one sends work to the wrong repo).
     private func localPath(for pull: PullRequestWatch.Pull) -> String? {
-        let fm = FileManager.default
-        for root in ProjectIndex.defaultRoots {
-            guard let walker = fm.enumerator(atPath: root) else { continue }
-            while let entry = walker.nextObject() as? String {
-                if walker.level > 3 { walker.skipDescendants(); continue }
-                if (entry as NSString).lastPathComponent.lowercased() == pull.repoName.lowercased(),
-                    fm.fileExists(atPath: "\(root)/\(entry)/.git")
-                {
-                    return "\(root)/\(entry)"
-                }
-            }
-        }
-        return nil
+        checkouts[pull.repo]
     }
 }

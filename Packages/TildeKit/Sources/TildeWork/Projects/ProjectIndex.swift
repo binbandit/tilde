@@ -8,6 +8,8 @@ public actor ProjectIndex {
         public var stack: [String]
         /// Last time anything moved in the repo (HEAD, index), a cheap recency signal.
         public var lastActive: Date
+        /// Where `origin` points, as owner/repo: what tells apart checkouts with the same folder name.
+        public var remote: String?
     }
 
     private let roots: [String]
@@ -42,6 +44,7 @@ public actor ProjectIndex {
                 for word in words {
                     if name == word { score += 10 }
                     else if name.contains(word) { score += 5 }
+                    else if project.remote?.lowercased().contains(word) == true { score += 4 }
                     else if path.contains(word) || project.stack.joined(separator: " ").lowercased().contains(word) { score += 1 }
                     else { return nil }
                 }
@@ -53,6 +56,12 @@ public actor ProjectIndex {
     }
 
     public func recent(limit: Int = 8) -> [Project] { search("", limit: limit) }
+
+    /// The checkout of `repo` (owner/repo), the most recently active if there are several.
+    public func checkout(of repo: String) -> Project? {
+        refreshIfStale()
+        return projects.filter { $0.remote?.caseInsensitiveCompare(repo) == .orderedSame }.max { $0.lastActive < $1.lastActive }
+    }
 
     private func refreshIfStale() {
         if let scannedAt, Date.now.timeIntervalSince(scannedAt) < 600 { return }
@@ -90,6 +99,26 @@ public actor ProjectIndex {
         }
         return Project(
             name: (path as NSString).lastPathComponent, path: path, stack: stack,
-            lastActive: stamps.max() ?? .distantPast)
+            lastActive: stamps.max() ?? .distantPast, remote: Self.origin(of: path))
+    }
+
+    /// owner/repo from the checkout's `origin` URL (https or ssh), read from its git config.
+    static func origin(of path: String) -> String? {
+        guard let config = try? String(contentsOfFile: "\(path)/.git/config", encoding: .utf8) else { return nil }
+        var inOrigin = false
+        for line in config.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+            if line.hasPrefix("[") { inOrigin = line == "[remote \"origin\"]" }
+            guard inOrigin, line.hasPrefix("url"), let url = line.split(separator: "=", maxSplits: 1).last else { continue }
+            return remote(fromURL: url.trimmingCharacters(in: .whitespaces))
+        }
+        return nil
+    }
+
+    /// `git@github.com:owner/repo.git` or `https://github.com/owner/repo` as `owner/repo`.
+    static func remote(fromURL url: String) -> String? {
+        let tail = url.split(whereSeparator: { $0 == ":" || $0 == "/" }).suffix(2).map(String.init)
+        guard tail.count == 2 else { return nil }
+        let repo = tail[1].hasSuffix(".git") ? String(tail[1].dropLast(4)) : tail[1]
+        return "\(tail[0])/\(repo)"
     }
 }

@@ -102,7 +102,7 @@ public final class Conductor {
         dreamer = Dreamer(memory: memory, home: home, model: config.dream) { [home, projects, notebook = memory.notebook] day in
             await Evidence.gather(day: day, home: home, notebook: notebook, projects: projects)
         }
-        initiative = Initiative(home: home, review: config.review)
+        initiative = Initiative(home: home, review: config.review, projects: projects)
         // Everything tilde had open, loaded before the app is up, so nothing said in the first moments
         // lands on (and is saved over) an empty conversation.
         restore()

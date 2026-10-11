@@ -39,7 +39,10 @@ struct JobStatus: View {
         }
     }
 
-    private var label: String {
+    private var label: String { Self.words(job) }
+
+    /// A job's state in a word or two.
+    static func words(_ job: Job) -> String {
         switch job.phase {
         case .needsYou: "needs you"
         case .ready: "ready"

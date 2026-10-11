@@ -103,7 +103,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lensTracking = nil
         let heard = await listener.finish()
         model.listening = nil
-        inlet.heard(send ? heard : "")
+        inlet.heard(send ? heard : "", cancelled: !send)
     }
 
     // MARK: tilde:// routes

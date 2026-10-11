@@ -10,12 +10,13 @@ struct ConversationView: View {
     var maxThread: CGFloat
     var actions: InletActions
     @State private var threadHeight: CGFloat = 0
+    @State private var headerHovered = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
             thread
-            if !model.jobs.isEmpty { CrewStrip(actions: actions) }
+            if !model.crew.isEmpty { CrewStrip(actions: actions) }
             // While you're talking, your words are the pending message above.
             if inlet.mode != .listening {
                 Composer(referent: referent, focused: inlet.mode == .compose, actions: actions)
@@ -28,8 +29,17 @@ struct ConversationView: View {
             TildeMark(mood: mood, size: 20)
             Text("tilde").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text)
             Spacer()
+            // Settings, for the times you need them, without hunting for a right-click.
+            SettingsLink {
+                Image(systemName: "gearshape").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text3)
+            }
+            .buttonStyle(.plain)
+            .help("Settings")
+            .opacity(headerHovered ? 1 : 0)
             Meta(text: Date.now.formatted(.dateTime.weekday(.wide)), color: Theme.text3)
         }
+        .onHover { headerHovered = $0 }
+        .animation(Theme.quick, value: headerHovered)
     }
 
     /// The conversation hugs its content until it's tall, then scrolls, newest at the bottom.
@@ -45,6 +55,11 @@ struct ConversationView: View {
                             .padding(.top, gap != nil || index == 0 ? 0 : joins(index, in: model.earlier) ? 3 : 12)
                     }
                     Separator(text: model.thread.first.map { "Today \($0.at.formatted(date: .omitted, time: .shortened))" } ?? "Today", first: false)
+                }
+                // If tilde couldn't start, it says so where you'd talk to it.
+                if let error = model.startupError {
+                    MessageRow(message: Message(from: .tilde, text: "I couldn't start: \(error)", trouble: true), chips: [], actions: actions)
+                        .padding(.bottom, 12)
                 }
                 if model.thread.isEmpty, model.listening == nil {
                     Greeting(actions: actions)
@@ -122,7 +137,7 @@ struct ConversationView: View {
         if model.listening != nil { return .listening(level: model.listening?.level ?? 0) }
         if model.thread.last?.streaming == true { return .thinking }
         if !model.attention.isEmpty { return .needsYou }
-        if model.openJobs.contains(where: { $0.phase.isActive }) { return .working }
+        if model.crew.contains(where: { $0.phase.isActive }) { return .working }
         return .idle
     }
 

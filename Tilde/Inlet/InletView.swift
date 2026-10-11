@@ -19,7 +19,7 @@ struct InletView: View {
 
     private typealias Look = Inlet.Look
 
-    private var look: Look { inlet.look(busy: !model.openJobs.isEmpty || !model.attention.isEmpty) }
+    private var look: Look { inlet.look(busy: !model.crew.isEmpty || !model.attention.isEmpty) }
 
     private var placement: InletPlacement { inlet.placement }
 

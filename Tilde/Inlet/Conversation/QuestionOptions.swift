@@ -7,6 +7,8 @@ import TildeKit
 struct QuestionOptions: View {
     @Environment(AppModel.self) private var model
     var item: Attention
+    /// ⌘↩ answers with tilde's pick (for the question you're looking at).
+    var acceptsReturn = false
     @State private var always = false
 
     var body: some View {
@@ -29,6 +31,7 @@ struct QuestionOptions: View {
                     ForEach(Array(item.options.enumerated()), id: \.offset) { index, option in
                         Button(option) { answer(option) }
                             .buttonStyle(OptionStyle(picked: index == item.recommended, stacked: false))
+                            .keyboardShortcut(acceptsReturn && index == item.recommended ? KeyboardShortcut(.return, modifiers: .command) : nil)
                     }
                 }
                 .fixedSize()

@@ -24,6 +24,9 @@ enum ComputerUse {
         "com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop", "com.apple.Passwords",
         "com.apple.systempreferences", "com.apple.Wallet", "com.tinyspeck.slackmacgap", "com.hnc.Discord",
         "net.whatsapp.WhatsApp", "ru.keepcoder.Telegram",
+        // Terminals are a shell with none of a worker's sandbox.
+        "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable", "net.kovidgoyal.kitty",
+        "org.alacritty", "com.github.wez.wezterm",
     ]
 
     static let config: JSON = [

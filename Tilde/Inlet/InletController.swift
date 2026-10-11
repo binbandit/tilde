@@ -51,7 +51,12 @@ final class InletController {
         InletActions(
             send: { [weak self] in self?.send($0) },
             openJob: { [weak self] in self?.openJob($0) },
-            compose: { [weak self] in if self?.inlet.mode != .compose { self?.set(.compose) } },
+            compose: { [weak self] in
+                guard let self, self.inlet.mode != .compose else { return }
+                // Typing after opening it by hover: what you were working in comes along, as with a double-tap.
+                if self.exchangeTarget == nil { self.exchangeTarget = Pointing.frontmost() }
+                self.set(.compose)
+            },
             dismiss: { [weak self] in self?.dismiss() })
     }
 
@@ -146,10 +151,14 @@ final class InletController {
         set(.listening)
     }
 
-    /// The key was released: send what was heard, or settle back.
-    func heard(_ text: String) {
+    /// The key was released: send what was heard. Hearing nothing from a real hold opens the composer to
+    /// type it instead, saying so; a cancelled one just settles back.
+    func heard(_ text: String, cancelled: Bool = false) {
         lens.hide()
-        if text.isEmpty { set(.rest) } else { send(text) }
+        guard text.isEmpty else { return send(text) }
+        if cancelled { return set(.rest) }
+        model.missedYou = true
+        set(.compose)
     }
 
     /// Sends what you said; tilde's reply peeks out as it's written.
@@ -234,7 +243,7 @@ final class InletController {
     /// view draws (the panel's content fills it, top-left origin), so the two never disagree.
     private var inletRect: CGRect {
         guard let panel else { return .zero }
-        let look = inlet.look(busy: !model.openJobs.isEmpty || !model.attention.isEmpty)
+        let look = inlet.look(busy: !model.crew.isEmpty || !model.attention.isEmpty)
         let local = inlet.shape(for: look).body(in: CGRect(origin: .zero, size: panel.frame.size))
         return CGRect(x: panel.frame.minX + local.minX, y: panel.frame.maxY - local.maxY, width: local.width, height: local.height)
     }
