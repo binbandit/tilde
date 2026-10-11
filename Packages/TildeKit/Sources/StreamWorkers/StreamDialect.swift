@@ -14,6 +14,8 @@ protocol StreamDialect: Sendable {
     var briefInPrompt: Bool { get }
     /// A stdin line that ends the running turn cleanly before the process is signalled.
     var interrupt: JSON? { get }
+    /// True when the harness exits after a failed turn, so its process is done with as the turn ends.
+    var exitsOnFailure: Bool { get }
 
     /// Writes whatever the harness needs into `scratch` (an existing folder outside the
     /// worktree) and returns the arguments for a process on `session`, or a new session when nil.
@@ -30,6 +32,7 @@ protocol StreamDialect: Sendable {
 
 extension StreamDialect {
     var interrupt: JSON? { nil }
+    var exitsOnFailure: Bool { false }
     func answer(_ call: GateCall, _ verdict: GateVerdict) -> JSON? { nil }
     func answer(_ dialog: StreamDialog, _ reply: WorkerAnswer) -> JSON? { nil }
 }

@@ -16,6 +16,8 @@ struct AmpDialect: StreamDialect {
 
     let label = "Amp"
     let gate = GateChannel.helper
+    /// An inference error ends Amp's run with an error result, and the process with it.
+    let exitsOnFailure = true
     let briefInPrompt = true
 
     /// Amp's tools that run commands or change files.

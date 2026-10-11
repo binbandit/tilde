@@ -165,6 +165,12 @@ public actor StreamWorker: Worker {
             guard busy else { return }
             busy = false
             let failed = !ok || failure != nil
+            // It's already on its way out: the next instruction starts another process on the
+            // session rather than being written into this one as it closes.
+            if failed, dialect.exitsOnFailure {
+                process = nil
+                Task { await source.terminate(grace: .seconds(2)) }
+            }
             emit.yield(.turnEnded(ok: !failed, text: failed ? failure ?? lastMessage : lastMessage))
         case .gate(let call):
             Task { await gate(call, from: source) }
