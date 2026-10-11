@@ -43,8 +43,10 @@ extension Initiative {
     /// The latest of what the watchers saw: PRs, agents waiting, and what's held back for later.
     func watching() -> String {
         var sections: [String] = []
+        let open = pulls.filter { $0.isMine && !$0.merged }
+        // Only the most recently updated are here; a count says how many there are in all.
         let groups = [
-            ("Your open pull requests", pulls.filter { $0.isMine && !$0.merged }),
+            (openTotal > open.count ? "Your open pull requests (the \(open.count) most recently updated of \(openTotal))" : "Your open pull requests", open),
             ("Merged in the last day", pulls.filter(\.merged)),
             ("Waiting on your review", pulls.filter(\.reviewRequested)),
         ]
@@ -63,8 +65,9 @@ extension Initiative {
     /// What `watching` says, after a first look at GitHub if tilde hasn't had one yet. The PRs
     /// are only remembered here; the next scheduled look still compares against the last one it saw.
     func watchingNow() async -> String {
-        if polledAt == .distantPast, let fresh = await PullRequestWatch.fetch() {
+        if polledAt == .distantPast, let (fresh, open) = await PullRequestWatch.fetch() {
             pulls = fresh
+            openTotal = open
             polledAt = .now
         }
         return watching()

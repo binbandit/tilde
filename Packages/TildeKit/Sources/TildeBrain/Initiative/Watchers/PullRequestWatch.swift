@@ -47,7 +47,7 @@ enum PullRequestWatch {
         query {
           viewer {
             login
-            open: pullRequests(first: 30, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ...pr } }
+            open: pullRequests(first: 30, states: [OPEN], orderBy: {field: UPDATED_AT, direction: DESC}) { totalCount nodes { ...pr } }
             merged: pullRequests(first: 15, states: [MERGED], orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { ...pr } }
           }
           requested: search(query: "is:open is:pr review-requested:@me archived:false", type: ISSUE, first: 15) { nodes { ...pr } }
@@ -66,9 +66,9 @@ enum PullRequestWatch {
         }
         """
 
-    static func fetch() async -> [Pull]? {
-        guard let output = await graphql(query) else { return nil }
-        return pulls(from: output)
+    static func fetch() async -> (pulls: [Pull], open: Int)? {
+        guard let output = await graphql(query), let pulls = pulls(from: output) else { return nil }
+        return (pulls, output["data"]?["viewer"]?["open"]?["totalCount"]?.int ?? pulls.count { $0.isMine && !$0.merged })
     }
 
     /// One PR by id (`owner/repo#12`), wherever it stands: for the ones that dropped off the lists above.

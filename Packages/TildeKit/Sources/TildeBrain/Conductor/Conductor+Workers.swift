@@ -25,12 +25,21 @@ extension Conductor {
             instructions: Supervision.brief(owner: Owner.firstName, place: place), writable: writable))
         workers[job.id] = worker
         Task { [weak self] in
-            for await event in worker.events { self?.handle(event, from: job.id) }
+            for await event in worker.events {
+                // A worker since stopped or replaced no longer speaks for its job (its late exit mustn't
+                // unregister the one that took over).
+                guard let self, self.workers[job.id].map({ $0 === worker }) ?? false else { continue }
+                self.handle(event, from: job.id)
+            }
         }
         try await worker.start(brief: brief)
     }
 
-    func stopWorker(_ id: String) async { await workers.removeValue(forKey: id)?.stop() }
+    /// Stops a job's worker; what it was waiting on goes with it.
+    func stopWorker(_ id: String) async {
+        for (request, pending) in requests where pending.job == id { requests.removeValue(forKey: request) }
+        await workers.removeValue(forKey: id)?.stop()
+    }
 
     private func handle(_ event: WorkerEvent, from jobID: String) {
         switch event {

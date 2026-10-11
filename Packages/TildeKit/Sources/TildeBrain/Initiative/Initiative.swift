@@ -49,6 +49,8 @@ public actor Initiative {
     var waiting: [AgentWatch.Waiting] = []
     /// The sessions of tilde's own jobs, which aren't the owner's agents to be reminded of.
     var ownSessions: Set<String> = []
+    /// How many PRs the owner has open in all, of which `pulls` holds the most recently updated.
+    var openTotal = 0
     /// The owner's checkouts, to find a PR's by its repo.
     let projects: ProjectIndex?
     /// A checkout path by owner/repo, for the PRs watched this poll.
@@ -113,7 +115,8 @@ public actor Initiative {
     /// run only learns the current state, so tilde doesn't open with a backlog.
     public func look(jobs: [Job], focusedRepo: String?) async -> [Notice] {
         var found: [Notice] = []
-        if Date.now.timeIntervalSince(polledAt) > 180, let fresh = await PullRequestWatch.fetch() {
+        if Date.now.timeIntervalSince(polledAt) > 180, let (fresh, open) = await PullRequestWatch.fetch() {
+            openTotal = open
             for repo in Set(fresh.map(\.repo)) where checkouts[repo] == nil {
                 checkouts[repo] = await projects?.checkout(of: repo)?.path
             }
