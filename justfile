@@ -12,8 +12,12 @@ build: gen
     xcodebuild -project Tilde.xcodeproj -scheme Tilde -configuration Debug -derivedDataPath {{derived}} -destination 'platform=macOS' build -quiet
 
 # Build and install the app: just install [destination]
-install destination="/Applications": build
-    ditto "{{app}}" "{{destination}}/tilde.app"
+install destination="": build
+    bash scripts/install-app.sh {{quote(app)}} {{if destination == "" { "'/Applications' \"$HOME/Applications\"" } else { quote(destination) }}}
+
+# Install recipe regressions using scratch app bundles
+test-install:
+    bash scripts/test-install.sh
 
 # Build and (re)launch the app
 run: build
