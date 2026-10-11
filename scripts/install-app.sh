@@ -3,6 +3,7 @@
 set -uo pipefail
 
 app=$1
+[[ "$app" == /* ]] || app="$PWD/$app"
 destination=$2
 fallback=${3:-}
 diagnostics=$(mktemp) || exit 1
@@ -31,6 +32,7 @@ destination_error() {
 
 install_to() {
     local directory=$1 target previous
+    [[ "$directory" == /* ]] || directory="$PWD/$directory"
     if ! LC_ALL=C mkdir -p -- "$directory" 2>"$diagnostics"; then
         destination_error
         return 1

@@ -76,6 +76,13 @@ install_fixture "$destination"
 assert_no_stage "$destination"
 printf 'PASS: literal source and destination, executable permissions, symlinks\n'
 
+ln -s "$source" "$scratch/project/-built.app"
+output=$(cd "$scratch/project" && bash "$repo/scripts/install-app.sh" '-built.app' '-literal')
+[[ -f "$scratch/project/-literal/tilde.app/Contents/Resources/current.txt" ]]
+[[ "$output" == "Installed tilde to $scratch/project/-literal/tilde.app" ]]
+assert_no_stage "$scratch/project/-literal"
+printf 'PASS: relative source and destination beginning with a hyphen\n'
+
 printf 'obsolete\n' > "$destination/tilde.app/Contents/Resources/obsolete.txt"
 install_fixture "$destination"
 [[ ! -e "$destination/tilde.app/Contents/Resources/obsolete.txt" ]]
