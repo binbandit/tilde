@@ -19,6 +19,8 @@ public final class Conductor {
         case asked(Attention)
         case resolved(attentionID: String)
         case said(String, jobID: String?)
+        /// tilde finished writing back to something you said.
+        case replied(String)
         case noted([Memory.Written])
         case jobChanged(Job)
         case trouble(String)

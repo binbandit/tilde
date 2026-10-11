@@ -27,6 +27,8 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         case .asked(let item): if Self.isAway { post(item) }
         case .resolved(let id): center.removeDeliveredNotifications(withIdentifiers: [id])
         case .said(let text, let jobID): if Self.isAway { say(text, jobID: jobID) }
+        // A reply you walked away from waits for you like a text would.
+        case .replied(let text): if Self.isAway { say(text, jobID: nil) }
         case .noted, .jobChanged, .trouble: break
         }
     }
@@ -53,7 +55,7 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         if let recommended, let i = options.firstIndex(of: recommended) { options.insert(options.remove(at: i), at: 0) }
         let actions: [UNNotificationAction] = options.prefix(3).enumerated().map { index, option in
             UNNotificationAction(identifier: "option.\(index).\(option)", title: index == 0 && recommended != nil ? "\(option) ✓" : option)
-        } + [UNTextInputNotificationAction(identifier: "reply", title: "Reply…", textInputButtonTitle: "Send", textInputPlaceholder: "Tell tilde…")]
+        } + [UNTextInputNotificationAction(identifier: "reply", title: "Reply…", textInputButtonTitle: "Send", textInputPlaceholder: "Message tilde")]
         let category = UNNotificationCategory(identifier: "ask.\(item.id)", actions: actions, intentIdentifiers: [])
         content.categoryIdentifier = category.identifier
         Task {
@@ -69,10 +71,16 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         let job = model.job(jobID)
         content.title = job?.title ?? "tilde"
         content.subtitle = job?.projectName ?? ""
-        content.body = text
+        content.body = Self.plain(text)
         content.threadIdentifier = jobID ?? "tilde"
         content.userInfo = jobID.map { ["job": $0] } ?? [:]
         center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
+    /// Notifications show plain words: a link as its text, emphasis without its stars.
+    private static func plain(_ text: String) -> String {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            .map { String($0.characters) } ?? text
     }
 
     // MARK: UNUserNotificationCenterDelegate
@@ -86,14 +94,13 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         let action = response.actionIdentifier
         let typed = (response as? UNTextInputNotificationResponse)?.userText
         await MainActor.run {
-            if let id = attentionID, let item = model.attention.first(where: { $0.id == id }) {
-                if let typed {
-                    model.answer(item, with: typed)
-                } else if action.hasPrefix("option.") {
-                    model.answer(item, with: action.split(separator: ".", maxSplits: 2).last.map(String.init) ?? "")
-                }
+            if let id = attentionID, let item = model.attention.first(where: { $0.id == id }), typed != nil || action.hasPrefix("option.") {
+                model.answer(item, with: typed ?? action.split(separator: ".", maxSplits: 2).last.map(String.init) ?? "")
             } else if let job = model.job(jobID) {
                 inlet.openJob(job)
+            } else if action == UNNotificationDefaultActionIdentifier {
+                // Clicked: the conversation opens where it left off, ready for what you say next.
+                inlet.compose(about: nil)
             }
         }
     }

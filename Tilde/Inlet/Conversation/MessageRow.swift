@@ -93,8 +93,9 @@ struct TildeWords: View {
             }
             ForEach(message.noted, id: \.self) { fact in
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text("Noted").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.amber)
-                    Text(fact).font(.system(size: 12)).foregroundStyle(Theme.text2).lineLimit(2)
+                    Image(systemName: "bookmark.fill").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.text3)
+                    Text("Noted").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text2)
+                    Text(fact).font(.system(size: 12)).foregroundStyle(Theme.text3).lineLimit(2)
                 }
                 .padding(.leading, 6)
                 .transition(.opacity)

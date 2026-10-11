@@ -99,6 +99,7 @@ Task { @MainActor in
             print("\(stamp()) ANSWER \(reply)")
             conductor.answer(item.id, with: reply)
         case .said(let text, let job): print("\(stamp()) SAY  [\(job ?? "-")] \(text)")
+        case .replied: break  // printed from the thread below
         case .noted(let written): written.forEach { print("\(stamp()) NOTED \($0.path): \($0.fact)\($0.replaced.map { " (replaced: \($0))" } ?? "")") }
         case .jobChanged(let job): print("\(stamp()) JOB  \(job.id) \(job.phase.rawValue): \(job.ticker)")
         case .trouble(let text): print("\(stamp()) TROUBLE \(text)")

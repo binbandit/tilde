@@ -54,6 +54,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .tap:
             inlet.compose(about: Pointing.referent(at: NSEvent.mouseLocation) ?? Pointing.frontmost())
         case .holdBegan:
+            guard Permission.microphone.granted else {
+                // Without the microphone, holding the key opens the composer instead, saying why.
+                model.cantHear = true
+                inlet.compose(about: Pointing.referent(at: NSEvent.mouseLocation) ?? Pointing.frontmost())
+                Task { _ = await Listener.requestAccess() }
+                return
+            }
+            model.cantHear = false
             beginListening(at: NSEvent.mouseLocation)
         case .holdEnded:
             Task { await endListening(send: true) }
@@ -87,6 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func endListening(send: Bool) async {
+        // Holding the key without the microphone opened the composer; letting go leaves it there.
+        guard model.listening != nil else { return }
         if let lensTracking { NSEvent.removeMonitor(lensTracking) }
         lensTracking = nil
         let heard = await listener.finish()

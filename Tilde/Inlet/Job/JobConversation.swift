@@ -199,8 +199,8 @@ private struct Direction: View {
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
-                // Yours in your blue, as in tilde's conversation; tilde's in a quiet well.
-                .background(entry.from == .you ? Theme.focus : Theme.raised, in: BubbleShape(mine: true, tail: true))
+                // Yours in your blue and tilde's in its grey, as in your conversation with tilde.
+                .background(entry.from == .you ? Theme.focus : Theme.bubble, in: BubbleShape(mine: true, tail: true))
             }
         }
     }

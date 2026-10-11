@@ -19,6 +19,18 @@ struct Composer: View {
     var body: some View {
         @Bindable var model = model
         VStack(alignment: .leading, spacing: 7) {
+            if model.cantHear, !Permission.microphone.granted {
+                HStack(spacing: 6) {
+                    Image(systemName: "mic.slash.fill").font(.system(size: 10)).foregroundStyle(Theme.text3)
+                    Text("tilde can't hear you yet.").font(.system(size: 11)).foregroundStyle(Theme.text2)
+                    Button("Allow the microphone") { Permission.microphone.open() }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.text)
+                    Spacer(minLength: 0)
+                }
+                .padding(.top, 3)
+            }
             if let answering {
                 HStack(spacing: 6) {
                     Text("Answering").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.amber)

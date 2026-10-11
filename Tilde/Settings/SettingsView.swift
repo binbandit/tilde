@@ -14,7 +14,18 @@ struct SettingsView: View {
         Form {
             Section("tilde") {
                 LabeledContent("Notebook", value: model.conductor?.memory.notebook.path ?? "-")
-                LabeledContent("Accessibility", value: Pointing.isTrusted ? "Allowed" : "Needed to see what you point at")
+                ForEach(Permission.allCases, id: \.self) { permission in
+                    LabeledContent {
+                        if permission.granted {
+                            Text("Allowed")
+                        } else {
+                            Button("Allow…") { permission.open() }
+                        }
+                    } label: {
+                        Text(permission.name)
+                        Text(permission.granted ? "" : "Needed \(permission.why)")
+                    }
+                }
                 if let error = model.startupError {
                     Text(error).foregroundStyle(Theme.failed)
                 }

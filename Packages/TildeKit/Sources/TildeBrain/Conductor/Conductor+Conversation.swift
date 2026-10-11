@@ -257,6 +257,7 @@ extension Conductor {
                     thread[i].text = thread[i].jobs.isEmpty ? "Done." : "On it."
                 }
             }
+            if let reply = thread.first(where: { $0.id == tap }), !reply.trouble { signal.yield(.replied(reply.text)) }
             quietTaps.remove(tap)
             optionalReplies.remove(tap)
             saveThread()

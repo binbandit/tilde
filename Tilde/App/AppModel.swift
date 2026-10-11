@@ -18,6 +18,8 @@ final class AppModel {
     var listening: Listening?
     /// The composer's text.
     var draft = ""
+    /// You held the key to talk, but tilde isn't allowed to hear you.
+    var cantHear = false
 
     struct Listening: Equatable {
         var transcript = ""
