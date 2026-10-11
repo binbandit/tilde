@@ -6,7 +6,9 @@ public enum Shell {
         public var status: Int32
         public var stdout: String
         public var stderr: String
-        public var ok: Bool { status == 0 }
+        /// Stopped for running past its timeout.
+        public var timedOut = false
+        public var ok: Bool { status == 0 && !timedOut }
         public var trimmed: String { stdout.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
@@ -19,10 +21,11 @@ public enum Shell {
         }
     }
 
-    /// Runs `command` (argv[0] resolved on the user's PATH) and returns its output.
+    /// Runs `command` (argv[0] resolved on the user's PATH) and returns its output. Past `timeout`
+    /// it's stopped, and the output says so.
     public static func run(
         _ command: [String], cwd: String? = nil, environment: [String: String] = UserEnvironment.shared.variables,
-        input: String? = nil
+        input: String? = nil, timeout: Duration? = nil
     ) async throws -> Output {
         let executable = try ChildProcess.resolve(command[0], path: environment["PATH"] ?? "")
         return try await withCheckedThrowingContinuation { continuation in
@@ -39,6 +42,7 @@ public enum Shell {
             // Drain both pipes concurrently so a chatty command can't deadlock on a full buffer.
             let group = DispatchGroup()
             nonisolated(unsafe) var outData = Data(), errData = Data()
+            nonisolated(unsafe) var timedOut = false
             group.enter()
             DispatchQueue.global().async { outData = out.fileHandleForReading.readDataToEndOfFile(); group.leave() }
             group.enter()
@@ -49,11 +53,20 @@ public enum Shell {
                     continuation.resume(returning: Output(
                         status: process.terminationStatus,
                         stdout: String(decoding: outData, as: UTF8.self),
-                        stderr: String(decoding: errData, as: UTF8.self)))
+                        stderr: String(decoding: errData, as: UTF8.self),
+                        timedOut: timedOut))
                 }
             }
             do {
                 try process.run()
+                if let timeout {
+                    let (seconds, attoseconds) = timeout.components
+                    DispatchQueue.global().asyncAfter(deadline: .now() + Double(seconds) + Double(attoseconds) / 1e18) {
+                        guard process.isRunning else { return }
+                        timedOut = true
+                        process.terminate()
+                    }
+                }
                 if let input { stdin.fileHandleForWriting.write(Data(input.utf8)) }
                 try? stdin.fileHandleForWriting.close()
             } catch {

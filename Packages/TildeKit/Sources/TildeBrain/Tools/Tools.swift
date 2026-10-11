@@ -3,7 +3,7 @@ import WorkerKit
 
 /// The manager's hands. Each tool returns a short, plain-text result the model can act on.
 ///
-/// Tools are defined by group (delegation, supervision, conversation, memory, agenda), one
+/// Tools are defined by group (delegation, supervision, conversation, GitHub, memory, agenda), one
 /// file each; this list is the toolbox and the order the manager sees it in.
 extension Conductor {
     func makeTools() -> Toolset {
@@ -18,6 +18,8 @@ extension Conductor {
             jobsTool,
             stopTool,
             lookTool,
+            pullRequestsTool,
+            githubTool,
             recallTool,
             rememberTool,
             forgetTool,

@@ -2,7 +2,7 @@ import AppKit
 import TildeKit
 
 /// `tilde://debug/<route>` shows the Inlet in any state with fixture data
-/// (fixtures, empty, clear, inlet?mode=&real=1, listen?text=, job?id=&as=conversation, place?edge=, frame, hide),
+/// (fixtures, empty, clear, inlet?mode=&real=1&doing=, listen?text=, job?id=&as=conversation, place?edge=, frame, hide),
 /// for design work and screenshots without a live agent. Nothing here takes the keyboard.
 @MainActor
 enum DebugRoutes {
@@ -23,8 +23,14 @@ enum DebugRoutes {
             inlet.set(.rest)
             delegate.lens.hide()
         case "/inlet":
-            // &real=1 shows what's really there.
+            // &real=1 shows what's really there; &doing=<activity> adds a reply tilde is still working on.
             if value("real") != "1" { fixtures() }
+            if let doing = value("doing"), model.fixture != nil {
+                var pending = Message(from: .tilde, text: "", streaming: true)
+                pending.activity = doing.isEmpty ? nil : doing
+                model.fixture?.thread.append(Message(from: .you, text: "how many PRs do I have open in oh-fx?"))
+                model.fixture?.thread.append(pending)
+            }
             switch value("mode") ?? "open" {
             case "rest": inlet.set(.rest)
             case "compose":

@@ -60,6 +60,16 @@ extension Initiative {
         return sections.joined(separator: "\n\n")
     }
 
+    /// What `watching` says, after a first look at GitHub if tilde hasn't had one yet. The PRs
+    /// are only remembered here; the next scheduled look still compares against the last one it saw.
+    func watchingNow() async -> String {
+        if polledAt == .distantPast, let fresh = await PullRequestWatch.fetch() {
+            pulls = fresh
+            polledAt = .now
+        }
+        return watching()
+    }
+
     /// Pull requests and agent sessions that changed since `date`, for the morning brief.
     func changes(since date: Date) -> [String] {
         pulls.filter { ($0.updatedAt ?? .distantPast) > date }.map(\.line)

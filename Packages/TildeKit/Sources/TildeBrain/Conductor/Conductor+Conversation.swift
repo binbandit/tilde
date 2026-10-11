@@ -22,6 +22,11 @@ extension Conductor {
             body += "\n<selection>\n\(selected.clipped(to: 4_000, keepLines: true))\n</selection>"
         }
         Task {
+            // Questions about PRs are common enough that what tilde last saw rides along, so most need no tool.
+            if text.contains(/(?i)\b(PRs?|pull requests?|reviews?|CI|checks)\b/) {
+                let watching = await initiative.watchingNow()
+                if !watching.isEmpty { body += "\n<pull_requests>\n\(watching)\n</pull_requests>" }
+            }
             await manager.post(.init(
                 "<tap \(attributes)>\n\(body)\n</tap>", tap: id,
                 paths: [context.repo, context.cwd, context.document].compactMap { $0 },
@@ -47,7 +52,14 @@ extension Conductor {
             resolve(requestID, answer, by: .you)
             forwarded = true
         }
-        if let jobID = item.jobID { update(jobID) { if $0.phase == .needsYou { $0.phase = .working } } }
+        if let jobID = item.jobID {
+            // An answer that went to the worker sets it going again; any other is tilde's to act on.
+            update(jobID) {
+                guard $0.phase == .needsYou else { return }
+                $0.phase = forwarded ? .working : .deciding
+                if !forwarded { $0.ticker = "Acting on your answer" }
+            }
+        }
 
         let job = item.jobID.flatMap { id in jobs.first { $0.id == id } }
         if always, let job {
@@ -62,8 +74,12 @@ extension Conductor {
 
         let tag = "<answer to=\"\(item.id)\"\(item.jobID.map { " job=\"\($0)\"" } ?? "")\(forwarded ? " delivered-to-worker=\"yes\"" : "")>"
         Task {
+            // Everything the question carried, so the answer can be acted on even by a manager thread that never saw it asked.
+            let about = await initiative.subjects(of: item.id)
+            let context = [item.detail.map { "Detail: \($0)" }, about.isEmpty ? nil : "About: \(about.joined(separator: ", "))"]
             await manager.post(.init(
-                "\(tag)\nQuestion: \(item.question)\nAnswer: \(reply)\(always ? "\n(They asked to always do this.)" : "")\n</answer>",
+                "\(tag)\nQuestion: \(item.question)\n" + context.compactMap { $0 }.map { "\($0)\n" }.joined()
+                    + "Answer: \(reply)\(always ? "\n(They asked to always do this.)" : "")\n</answer>",
                 jobs: item.jobID.map { [$0] } ?? []))
         }
         Task {
@@ -90,6 +106,10 @@ extension Conductor {
         switch output {
         case .reply(let taps, let text):
             for tap in taps { writeReply(tap, text, done: false) }
+        case .activity(let taps, let text):
+            for tap in taps {
+                if let i = thread.firstIndex(where: { $0.id == tap }), thread[i].streaming { thread[i].activity = text }
+            }
         case .replyDone(let taps, let text):
             for tap in taps { writeReply(tap, text, done: true) }
             replying = nil
@@ -167,6 +187,7 @@ extension Conductor {
         if !text.isEmpty { thread[i].text = text }
         if done {
             thread[i].streaming = false
+            thread[i].activity = nil
             if thread[i].text.isEmpty { thread[i].text = thread[i].jobs.isEmpty ? "Done." : "On it." }
             quietTaps.remove(tap)
             saveThread()

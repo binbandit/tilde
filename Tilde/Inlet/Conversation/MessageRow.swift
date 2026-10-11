@@ -51,7 +51,12 @@ struct TildeWords: View {
         VStack(alignment: .leading, spacing: 9) {
             // tilde's own mark (in the peek or the header) shows it's thinking; the line just waits.
             if message.streaming, message.text.isEmpty {
-                Text("On it…").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.text2)
+                Text(message.activity.map { "\($0)…" } ?? "On it…")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.text2)
+                    .shimmering()
+                    .contentTransition(.opacity)
+                    .animation(Theme.quick, value: message.activity)
             } else {
                 Prose(
                     text: message.text, size: 14, weight: message.attentionID == nil ? .regular : .medium,

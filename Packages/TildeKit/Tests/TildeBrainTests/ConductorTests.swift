@@ -153,6 +153,21 @@ final class LaunchLog: Sendable {
         #expect(next.thread.first?.at == asked.createdAt)
     }
 
+    @Test func aJobWaitingOnTildesQuestionStaysPutThroughARestart() async throws {
+        let first = try await makeConductor()
+        _ = await call(first, "delegate", ["project_path": .string(repo), "title": "Nav bar", "brief": "Add a nav", "harness": "scripted"])
+        let job = try #require(first.jobs.first)
+        try await waitFor(first) { first.jobs.first?.phase == .deciding }
+        _ = await call(first, "ask", ["question": "Ship app#7 as is?", "options": ["Yes", "No"], "job": .string(job.id)])
+        #expect(first.jobs.first?.phase == .needsYou)
+
+        // Its worker had finished its turn; a restart leaves it waiting on the question, not working again.
+        let next = try Conductor(home: first.home, config: config)
+        next.restore()
+        #expect(next.jobs.first?.phase == .needsYou)
+        #expect(next.attention.map(\.jobID) == [job.id])
+    }
+
     @Test func scratchJobsNeedNoRepo() async throws {
         let conductor = try await makeConductor()
         let started = await call(conductor, "delegate", ["title": "Check the app", "brief": "Look at it", "harness": "scripted"])

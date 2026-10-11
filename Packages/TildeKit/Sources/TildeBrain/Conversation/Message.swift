@@ -27,6 +27,8 @@ public struct Message: Identifiable, Codable, Sendable, Hashable {
     public var trouble: Bool
     /// A question that stopped needing an answer, and why ("oh-fx#713 merged").
     public var settled: String?
+    /// While tilde works on this reply and has nothing to say yet: what it's doing ("Checking GitHub").
+    public var activity: String?
 
     public init(
         id: String? = nil, from: From, text: String, at: Date = .now, pointing: String? = nil, jobs: [String] = [],

@@ -96,7 +96,13 @@ public final class Conductor {
         restore()
         thread = threads.load()
         reconcileQuestions()
-        Task { await manager.warm() }
+        // The day's manager thread is kept open, so nobody waits for it to start, even on a new day.
+        Task { [manager] in
+            while !Task.isCancelled {
+                await manager?.warm()
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
         Task { await dreamer.catchUp() }
         if initiativeEnabled { Task { await watch() } }
         Task { [weak self] in

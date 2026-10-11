@@ -20,6 +20,8 @@ Three things make it feel native rather than bolted on:
 
 The trigger is configurable (double-tap ⌘ or ⌃, hold right ⌥ or right ⌘, or Fn), because not every keyboard has a right Option key.
 
+What you say never waits behind tilde's own work: it's brought into whatever tilde is in the middle of, and answered first. Questions are answered by tilde itself, in a few seconds (what it knows about your PRs comes along with any question that mentions them); only work goes to agents. While a reply is coming, the line where it will appear says what tilde is doing ("Checking GitHub…").
+
 What gets captured with each request: the frontmost app and window, the document it shows (AXDocument), a terminal's working directory (read from its shell processes), the git repo that contains them, any selected text, and the job whose row you pointed at.
 
 ## The Inlet

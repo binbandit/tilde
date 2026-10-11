@@ -23,6 +23,8 @@ extension Conductor {
         // Questions for workers died with their requests; tilde's own still stand.
         attention = snapshot.attention.filter { $0.requestID == nil }
         for job in jobs where job.phase.isActive {
+            // Waiting on a question tilde asked rather than one from its worker: the worker isn't mid-turn, so it stays put.
+            if job.phase == .needsYou, attention.contains(where: { $0.jobID == job.id && $0.requestID == nil }) { continue }
             update(job.id) { $0.phase = .working; $0.ticker = "Resuming after a restart" }
             Task {
                 do {

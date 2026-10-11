@@ -7,14 +7,20 @@ import WorkerKit
 /// The manager: a Codex thread (gpt-6.1-sol by default, cheap and quick) whose
 /// tools are tilde's orchestration toolset and whose memory is the notebook.
 ///
-/// Messages are handled one turn at a time. Whatever arrives while a turn runs
-/// is batched into the next, so every turn knows whether a <tap> started it,
-/// and therefore whether its words are a reply in the thread or stay private.
+/// Messages are handled one turn at a time. What tilde hears while a turn runs is batched
+/// into the next, so every turn knows whether a <tap> started it, and therefore whether its
+/// words are a reply in the thread or stay private. What Brayden says never waits: it's
+/// steered into the turn in progress, which then answers them.
+///
+/// A turn whose model goes quiet (a connection that hangs, which Codex alone would wait out
+/// for five minutes) is asked again after `Config.stallAfter`.
 public actor Manager: CodexHost {
     public struct Config: Sendable {
         public var model = "gpt-6.1-sol"
         public var effort = "low"
         public var executable = "codex"
+        /// How long a turn may wait on the model, with nothing at all coming back, before it's asked again.
+        public var stallAfter: TimeInterval = 45
         public init() {}
     }
 
@@ -22,8 +28,12 @@ public actor Manager: CodexHost {
         /// Streaming reply text for the taps that started this turn.
         case reply(taps: [String], text: String)
         case replyDone(taps: [String], text: String)
+        /// What the turn is doing right now ("Checking GitHub"), for the taps waiting on it.
+        case activity(taps: [String], text: String)
         case trouble(String)
     }
+
+    static let maxAttempts = 3
 
     public struct Message: Sendable {
         public var text: String
@@ -59,6 +69,15 @@ public actor Manager: CodexHost {
     private var replyText = ""
     private var lastTurn: Transcript?
     private var turnStarted = Date.now
+    /// Everything the running turn was asked, to ask a fresh thread again if it comes to that.
+    private var asked = ""
+    /// The tools the running turn has already called, so asking again never repeats them.
+    private var done: [String] = []
+    private var attempts = 0
+    /// Set while a stalled turn is being stopped, to be asked again.
+    private var retrying = false
+    /// Counts turns, so a watchdog only ever watches its own.
+    private var generation = 0
 
     /// What happened in a tap turn, for the scribe.
     public struct Transcript: Sendable {
@@ -74,6 +93,32 @@ public actor Manager: CodexHost {
     }
 
     public func post(_ message: Message) {
+        if message.tap != nil, turn != nil, !retrying {
+            Task { await self.steer(message) }
+            return
+        }
+        inbox.append(message)
+        pump()
+    }
+
+    /// Brought into the turn in progress, which answers it; or, if that turn just ended, given one of its own.
+    private func steer(_ message: Message) async {
+        guard let session, let tap = message.tap else { return requeue(message) }
+        let text = await withBriefing(message.text, paths: message.paths, jobs: message.jobs)
+        do {
+            try await session.steer(text)
+        } catch {
+            return requeue(message)
+        }
+        guard turn != nil else { return requeue(message) }
+        Log.info("manager", "steered in: \(message.text.clipped(to: 200))")
+        turn?.append(tap)
+        asked += "\n\n" + text
+        streaming = ""
+        lastTurn = Transcript(said: [lastTurn?.said, message.text].compactMap { $0 }.joined(separator: "\n"), replied: "")
+    }
+
+    private func requeue(_ message: Message) {
         inbox.append(message)
         pump()
     }
@@ -107,12 +152,70 @@ public actor Manager: CodexHost {
     private func send(_ batch: [Message]) async {
         let text = batch.map(\.text).joined(separator: "\n\n")
         turnStarted = .now
+        attempts = 0
+        done = []
         Log.info("manager", "turn: \(text.clipped(to: 300))")
         do {
             let session = try await ensureSession()
-            let briefing = await memory.briefing(
-                for: text, paths: batch.flatMap(\.paths), jobs: Array(Set(batch.flatMap(\.jobs))))
-            try await session.send(briefing.map { "\($0)\n\n\(text)" } ?? text, effort: config.effort)
+            asked = await withBriefing(text, paths: batch.flatMap(\.paths), jobs: Array(Set(batch.flatMap(\.jobs))))
+            try await session.send(asked, effort: config.effort)
+            watch()
+        } catch {
+            emit.yield(.trouble("I couldn't reach Codex: \(error)"))
+            endTurn()
+        }
+    }
+
+    private func withBriefing(_ text: String, paths: [String], jobs: [String]) async -> String {
+        await memory.briefing(for: text, paths: paths, jobs: jobs).map { "\($0)\n\n\(text)" } ?? text
+    }
+
+    // MARK: Stalls
+
+    /// Watches the running turn until it ends, and asks again if the model goes quiet.
+    private func watch() {
+        generation += 1
+        let mine = generation
+        Task {
+            while true {
+                try? await Task.sleep(for: .seconds(min(5, config.stallAfter / 2)))
+                guard generation == mine, turn != nil, !retrying, let session else { return }
+                if let quiet = await session.silence, quiet > config.stallAfter {
+                    return await stalled(session)
+                }
+            }
+        }
+    }
+
+    private func stalled(_ session: CodexSession) async {
+        attempts += 1
+        retrying = true
+        Log.info("manager", "nothing from the model in \(Int(config.stallAfter))s; asking again (\(attempts))")
+        // Twice is no fluke: a fresh process, and so a fresh connection, asks again.
+        guard attempts == 1 else { return await session.stop() }
+        await session.interrupt()
+        // If Codex can't even stop the turn, the same.
+        try? await Task.sleep(for: .seconds(10))
+        if retrying, session === self.session { await session.stop() }
+    }
+
+    /// Asks a stalled turn again: the same thread carries on from where it was; a fresh one is
+    /// told everything again, and what was already done.
+    private func askAgain(sameThread: Bool) async {
+        retrying = false
+        guard attempts < Self.maxAttempts else {
+            emit.yield(.trouble("The model isn't answering right now. Try again in a minute."))
+            return endTurn()
+        }
+        streaming = ""
+        replyText = ""
+        let already = done.isEmpty ? "" : "\n\nAlready done this turn, not to be repeated:\n" + done.map { "- \($0)" }.joined(separator: "\n")
+        let text = sameThread
+            ? "(No answer came back, so this is the same turn again. Carry on from where you were.)"
+            : "(The connection dropped and this is a fresh thread; here is the turn again.)\n\n\(asked)\(already)"
+        do {
+            try await ensureSession().send(text, effort: config.effort)
+            watch()
         } catch {
             emit.yield(.trouble("I couldn't reach Codex: \(error)"))
             endTurn()
@@ -195,19 +298,52 @@ public actor Manager: CodexHost {
                 replyText = text
                 streaming = ""
             case .turnCompleted(let ok, let error):
+                if retrying {
+                    await askAgain(sameThread: true)
+                    continue
+                }
                 if !ok, let error { emit.yield(.trouble(error.clipped(to: 200))) }
                 endTurn()
             case .notice(let text):
                 emit.yield(.trouble(text.clipped(to: 200)))
             case .exited(let status, let detail):
-                if status != 0 { emit.yield(.trouble("The manager stopped (\(status)). \(detail.clipped(to: 200))")) }
                 self.session = nil
+                if retrying {
+                    await askAgain(sameThread: false)
+                    continue
+                }
+                if status != 0 { emit.yield(.trouble("The manager stopped (\(status)). \(detail.clipped(to: 200))")) }
                 if turn != nil { endTurn() }
             case .itemStarted(let item):
-                if let line = Self.trace(item) { Log.info("manager", line) }
+                if let line = Self.trace(item) {
+                    Log.info("manager", line)
+                    done.append(line)
+                }
+                if let taps = turn, !taps.isEmpty, let doing = Self.doing(item) { emit.yield(.activity(taps: taps, text: doing)) }
             case .turnStarted:
                 break
             }
+        }
+    }
+
+    /// What a step of the turn looks like from the outside, in a few words.
+    static func doing(_ item: JSON) -> String? {
+        switch item["type"]?.string {
+        case "commandExecution": return "Looking around"
+        case "webSearch": return "Searching the web"
+        case "dynamicToolCall":
+            return switch item["tool"]?.string {
+            case "github", "pull_requests": "Checking GitHub"
+            case "recall", "remember", "forget": "Checking my notes"
+            case "jobs", "transcript": "Checking on the agents"
+            case "projects": "Finding the project"
+            case "look": "Looking at what you're doing"
+            case "delegate": "Handing it to an agent"
+            case "steer": "Talking to the agent"
+            case "ask": "Writing you a question"
+            default: nil
+            }
+        default: return nil
         }
     }
 

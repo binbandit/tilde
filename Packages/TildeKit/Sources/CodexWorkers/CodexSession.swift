@@ -27,6 +27,10 @@ public actor CodexSession {
     private var pending: [Int: CheckedContinuation<Result<JSON, Failure>, Never>] = [:]
     public private(set) var threadID: String?
     public private(set) var activeTurn: String?
+    /// When Codex last said anything at all.
+    public private(set) var lastHeard = Date.now
+    /// Tool calls, commands and the like in flight: while one runs, quiet is expected.
+    private var working: Set<String> = []
 
     public struct Failure: Error, CustomStringConvertible {
         public var description: String
@@ -75,6 +79,20 @@ public actor CodexSession {
         let result = try await request("thread/resume", .object(params))
         threadID = result["thread"]?["id"]?.string ?? id
         return threadID!
+    }
+
+    /// Seconds since Codex last said anything, while a turn waits on the model rather than a tool.
+    /// A turn that stays silent long after it should have started streaming has stalled.
+    public var silence: TimeInterval? {
+        guard activeTurn != nil, working.isEmpty else { return nil }
+        return Date.now.timeIntervalSince(lastHeard)
+    }
+
+    /// Adds to the turn in progress. Throws when there isn't one, rather than starting one.
+    public func steer(_ text: String) async throws {
+        guard let threadID, let activeTurn else { throw Failure(description: "No turn to steer") }
+        let input: JSON = [["type": "text", "text": .string(text), "text_elements": []]]
+        _ = try await request("turn/steer", ["threadId": .string(threadID), "expectedTurnId": .string(activeTurn), "input": input])
     }
 
     /// Starts a turn, or steers the one in progress.
@@ -134,6 +152,7 @@ public actor CodexSession {
 
     private func pump(_ process: ChildProcess) async {
         for await line in process.lines {
+            lastHeard = .now
             guard let message = JSON.parse(line) else { continue }
             handle(message)
         }
@@ -169,17 +188,22 @@ public actor CodexSession {
         switch method {
         case "turn/started":
             activeTurn = params["turn"]?["id"]?.string ?? activeTurn
+            working = []
             emit.yield(.turnStarted(id: activeTurn ?? ""))
         case "item/agentMessage/delta":
             if let delta = params["delta"]?.string { emit.yield(.textDelta(delta)) }
         case "item/started":
-            if let item = params["item"] { emit.yield(.itemStarted(item)) }
+            guard let item = params["item"] else { return }
+            if !Self.quietItems.contains(item["type"]?.string ?? ""), let id = item["id"]?.string { working.insert(id) }
+            emit.yield(.itemStarted(item))
         case "item/completed":
+            if let id = params["item"]?["id"]?.string { working.remove(id) }
             if params["item"]?["type"]?.string == "agentMessage", let text = params["item"]?["text"]?.string {
                 emit.yield(.message(text))
             }
         case "turn/completed":
             activeTurn = nil
+            working = []
             let turn = params["turn"]
             emit.yield(.turnCompleted(
                 ok: turn?["status"]?.string == "completed", error: turn?["error"]?["message"]?.string))
@@ -191,6 +215,9 @@ public actor CodexSession {
             break
         }
     }
+
+    /// Items the model streams itself; anything else (a command, a tool call) can run quietly for a while.
+    private static let quietItems: Set<String> = ["agentMessage", "reasoning", "userMessage"]
 
     private nonisolated func serve(_ method: String, _ params: JSON) async -> JSON {
         switch method {

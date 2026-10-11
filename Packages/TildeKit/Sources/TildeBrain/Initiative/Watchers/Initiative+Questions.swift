@@ -51,6 +51,11 @@ extension Initiative {
         persist()
     }
 
+    /// The PRs a question is about, as `owner/repo#12`, so its answer can say exactly which.
+    func subjects(of attentionID: String) -> [String] {
+        seen.asks[attentionID]?.map(\.subject) ?? []
+    }
+
     /// Open questions that no longer need an answer, and why (attention id -> "oh-fx#713 merged").
     /// Looks once per GitHub poll; PRs that fell off the watched lists are looked up one by one.
     func moot(_ open: [Attention]) async -> [String: String] {
