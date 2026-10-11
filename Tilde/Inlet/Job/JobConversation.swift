@@ -24,7 +24,7 @@ struct JobConversation: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0.rounded(.up) }
         }
         .scrollIndicators(.never)
-        .defaultScrollAnchor(.bottom)
+        .followingBottom()
         // Scrolled, lines fade at the edges instead of being sliced; at rest the padding is clear of it.
         .mask {
             VStack(spacing: 0) {

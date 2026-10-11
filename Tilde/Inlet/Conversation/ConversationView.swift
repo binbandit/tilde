@@ -53,7 +53,7 @@ struct ConversationView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { threadHeight = $0.rounded(.up) }
         }
         .scrollIndicators(.never)
-        .defaultScrollAnchor(.bottom)
+        .followingBottom()
         .frame(height: min(threadHeight, maxThread))
         // Once it scrolls, older lines fade under the header instead of being sliced.
         .mask {
