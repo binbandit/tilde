@@ -56,6 +56,7 @@ extension Conductor {
             let standing = { if case .permission(_, _, .some) = request.kind { true } else { false } }() && unallowedRail(request, job: jobID) == nil
             Task { await manager.post(.init(Self.describe(request, job: jobID, standing: standing), jobs: [jobID])) }
         case .turnEnded(let ok, let text):
+            turnEnded[jobID] = .now
             guard let job = jobs.first(where: { $0.id == jobID }), job.phase.isActive else { return }
             let tampered = gitGuards[jobID]?.restore(gitDirectory: (job.repoPath as NSString).appendingPathComponent(".git")) ?? []
             if !tampered.isEmpty {

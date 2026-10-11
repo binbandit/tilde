@@ -78,3 +78,26 @@ import WorkerKit
         Issue.record("The session ended without finishing the turn")
     }
 }
+
+@Suite struct ClaudeWorkerQueueTests {
+    /// What you send mid-turn runs as a turn of its own; the job's turn ends when that one has.
+    @Test(.timeLimit(.minutes(1))) func aTurnEndsAfterEverythingSentToIt() async throws {
+        let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "Fixtures/fake_claude_queue.py").path
+        let claude = FileManager.default.temporaryDirectory.appending(path: "fake-claude-queue-\(UUID().uuidString)").path
+        try "#!/bin/sh\nexec /usr/bin/python3 -I '\(fixture)'\n".write(toFile: claude, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude)
+        let worker = ClaudeWorker(workdir: FileManager.default.temporaryDirectory.path, sessionID: UUID().uuidString.lowercased(), executable: claude)
+        try await worker.start(brief: "add the nav")
+        try await worker.steer("and make it sticky")
+
+        var ended: [String] = []
+        for await event in worker.events {
+            if case .turnEnded(_, let text) = event {
+                ended.append(text)
+                break
+            }
+        }
+        #expect(ended == ["did: and make it sticky"])
+        await worker.stop()
+    }
+}

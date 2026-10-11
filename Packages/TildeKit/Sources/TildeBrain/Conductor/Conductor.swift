@@ -69,6 +69,10 @@ public final class Conductor {
     @ObservationIgnored var answerTaps: Set<String> = []
     /// Each worktree job's repo git config and hooks as they were when its worker started.
     @ObservationIgnored var gitGuards: [String: GitGuard] = [:]
+    /// When each job's agent last ended a turn, and was last handed words: one handed words since is busy
+    /// with them, whatever its job says.
+    @ObservationIgnored var turnEnded: [String: Date] = [:]
+    @ObservationIgnored var handed: [String: Date] = [:]
     /// What the watchers last saw of your PRs, kept here so a message can take it along without waiting.
     @ObservationIgnored var watching = ""
 

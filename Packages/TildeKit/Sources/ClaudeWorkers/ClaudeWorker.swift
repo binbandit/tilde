@@ -31,12 +31,17 @@ public actor ClaudeWorker: Worker, ClaudeHost {
         (events, emit) = AsyncStream<WorkerEvent>.makeStream(bufferingPolicy: .unbounded)
     }
 
+    /// Messages sent that Claude hasn't finished a turn for. One sent mid-turn is queued and run as a turn
+    /// of its own, so the job's turn has only ended when the last of them has.
+    private var unfinished = 0
+
     public func start(brief: String) async throws {
         let session = ClaudeSession(launch, host: self)
         self.session = session
         Task { await self.relay(session) }
         try await session.start()
         try await session.send(brief)
+        unfinished = 1
     }
 
     public func steer(_ text: String) async throws {
@@ -47,6 +52,7 @@ public actor ClaudeWorker: Worker, ClaudeHost {
             return
         }
         try await session.send(text)
+        unfinished += 1
     }
 
     public func resolve(_ requestID: String, _ answer: WorkerAnswer) {
@@ -113,7 +119,13 @@ public actor ClaudeWorker: Worker, ClaudeHost {
             case .ready(let id, _): emit.yield(.session(id: id))
             case .toolUse(_, let name, let input): emit.yield(.activity(Activity.describe(tool: name, input: input)))
             case .text(let text): emit.yield(.message(text))
-            case .turnDone(let turn): emit.yield(.turnEnded(ok: turn.ok, text: turn.text))
+            case .turnDone(let turn):
+                unfinished = max(0, unfinished - 1)
+                if unfinished > 0 {
+                    emit.yield(.activity("Moving on to the next message"))
+                } else {
+                    emit.yield(.turnEnded(ok: turn.ok, text: turn.text))
+                }
             case .notice(let text): emit.yield(.notice(text))
             case .exited(let status, let detail):
                 emit.yield(.exited(status == 0 ? nil : "Claude Code exited (\(status)). \(detail)"))

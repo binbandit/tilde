@@ -32,6 +32,7 @@ extension Conductor {
         guard let job = job(jobID) else { return }
         if let worker = workers[jobID] {
             try await worker.steer(text)
+            handed[jobID] = .now
         } else {
             try await spawn(job, brief: text, resume: job.sessionID != nil)
         }
