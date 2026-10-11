@@ -117,11 +117,11 @@ public actor Memory {
             throw Notebook.Refused(description: "That looks like a secret; tilde doesn't keep those.")
         }
         var note = await note(about: about, kind: kind)
-        let stamp = "\(Date.now.formatted(.iso8601.year().month().day())), \(source)"
+        let stamp = "\(Date.now.day), \(source)"
 
         let old = supersededFact(in: note, by: fact, hint: replaces)
         note.add(fact, section: old?.section ?? section, stamp: stamp, replacing: old)
-        note.set("updated", [Date.now.formatted(.iso8601.year().month().day())])
+        note.set("updated", [Date.now.day])
         try write(note)
         await notebook.commitChanges(context: old == nil ? "remember" : "revise")
         refresh()

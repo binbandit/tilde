@@ -217,7 +217,8 @@ extension Conductor {
         thread.insert(contentsOf: carried, at: 0)
     }
 
-    private func saveThread() { threads.save(thread) }
+    /// Saved under the day it belongs to, even when that day has just ended.
+    private func saveThread() { threads.save(thread, day: threadDay) }
 
     /// Streams a reply into its message. Quiet taps (welcome-backs) only appear if tilde says something.
     /// One reply answers everything said in a turn, under the last of it: earlier replies still

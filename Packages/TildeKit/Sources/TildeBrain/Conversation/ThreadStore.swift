@@ -6,7 +6,7 @@ struct ThreadStore: Sendable {
     let home: TildeHome
 
     func url(for day: Date) -> URL {
-        home.state.appending(path: "threads").appending(path: "\(day.formatted(.iso8601.year().month().day())).json")
+        home.state.appending(path: "threads").appending(path: "\(day.day).json")
     }
 
     func load(_ day: Date = .now) -> [Message] {

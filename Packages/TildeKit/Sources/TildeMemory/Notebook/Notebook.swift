@@ -60,7 +60,7 @@ public struct Notebook: Sendable {
     }
 
     public static func journalName(for date: Date = .now) -> String {
-        "journal/\(date.formatted(.iso8601.year().month().day())).md"
+        "journal/\(date.day).md"
     }
 
     private static func commit(_ message: String) -> [String] {

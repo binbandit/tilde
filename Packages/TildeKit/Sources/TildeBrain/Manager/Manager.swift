@@ -246,7 +246,7 @@ public actor Manager: CodexHost {
 
     private func ensureSession() async throws -> CodexSession {
         if let opening { return try await opening.value }
-        let day = Date.now.formatted(.iso8601.year().month().day())
+        let day = Date.now.day
         if let session, sessionDay == day, await session.isRunning { return session }
         if let opening { return try await opening.value }
 

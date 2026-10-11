@@ -47,7 +47,7 @@ public actor Dreamer {
         Log.info("dream", "dreaming about \(Notebook.journalName(for: day)) (\(evidence.count) chars of evidence)")
 
         await run(evidence, instructions: Self.instructions(owner: Owner.firstName, day: day),
-                  commit: "dream about \(day.formatted(.iso8601.year().month().day()))")
+                  commit: "dream about \(day.day)")
         lastDreamt = day
     }
 
@@ -78,7 +78,7 @@ public actor Dreamer {
     }
 
     static func meeting(owner: String) -> String {
-        let date = Date.now.formatted(.iso8601.year().month().day())
+        let date = Date.now.day
         return """
             You are tilde meeting \(owner) for the first time. tilde is their assistant for agent work: it briefs and \
             supervises coding agents for them. Your working directory is tilde's notebook (markdown notes). You are given \
@@ -113,7 +113,7 @@ public actor Dreamer {
     }
 
     static func instructions(owner: String, day: Date) -> String {
-        let date = day.formatted(.iso8601.year().month().day())
+        let date = day.day
         let pretty = day.formatted(.dateTime.weekday(.wide).day().month(.wide).year())
         return """
             You are tilde's dream: the once-a-day pass that keeps tilde's notebook (your working directory, a folder of \

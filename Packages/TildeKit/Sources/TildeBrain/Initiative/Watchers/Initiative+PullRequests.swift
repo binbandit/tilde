@@ -80,7 +80,7 @@ extension Initiative {
             if pull.mergeable == "CONFLICTING" { pending.append("a merge conflict") }
             if pull.review == "CHANGES_REQUESTED" { pending.append("requested changes") }
             guard !pending.isEmpty else { return nil }
-            let day = Date.now.formatted(.iso8601.year().month().day())
+            let day = Date.now.day
             return Notice(
                 key: "\(pull.id):nudge:\(day)", subject: pull.id, urgency: .soon,
                 summary: "You're in \(pull.repoName); \(pull.label) \"\(pull.title)\" has \(pending.joined(separator: " and ")).",
