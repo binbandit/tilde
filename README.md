@@ -24,11 +24,16 @@ It isn't an app. There's no window, no Dock icon, no menu-bar item. tilde lives 
 
 ```sh
 just run        # generate the Xcode project, build, launch
+just install    # build and install in /Applications, falling back to ~/Applications if blocked
+just install ~/Applications # choose an explicit destination
+just test-install # test installation with scratch app bundles
 just test       # the brain's unit tests (Packages/TildeKit)
 just smoke ~/some/scratch/repo "add a CONTRIBUTING.md"   # headless end-to-end run
 just show inlet "?mode=open"   # any surface, any state, with fixture data
 just log        # follow ~/.tilde/state/tilde.log
 ```
+
+Installation prints the app's final path. An explicit destination never falls back to another directory.
 
 Requires macOS 27, Xcode 27, and at least one of `claude` / `codex` signed in. tilde needs Accessibility (to see what you point at), Microphone and Speech Recognition (to hear you), and Notifications (for when you're away).
 
