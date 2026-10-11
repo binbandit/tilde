@@ -68,6 +68,8 @@ extension Conductor {
             $0.diff = diff
             $0.ticker = "Ready for review"
         }
+        // Its agent can rest: a message to the job picks its session back up.
+        await stopWorker(id)
         log.outcome(id, "\(summary)\n\nChanges: \(diff?.label ?? "unknown")")
         record(id, .tilde, .event, "Ready for review: \(summary)")
         log.journal("\(job.title) in \(job.projectName) is ready for review (\(id))")

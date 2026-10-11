@@ -103,15 +103,24 @@ public final class Conductor {
             await Evidence.gather(day: day, home: home, notebook: notebook, projects: projects)
         }
         initiative = Initiative(home: home, review: config.review)
-    }
-
-    public func start() async throws {
-        try await memory.prepare()
+        // Everything tilde had open, loaded before the app is up, so nothing said in the first moments
+        // lands on (and is saved over) an empty conversation.
         restore()
         thread = threads.load()
         earlier = threads.earlier(than: .now, last: Self.earlierShown)
         settleInterrupted()
         reconcileQuestions()
+    }
+
+    public func start() async throws {
+        resumeActive()
+        // Memory being unready (its index busy, a full disk) mustn't keep tilde from listening.
+        do {
+            try await memory.prepare()
+        } catch {
+            Log.info("memory", "couldn't prepare: \(error)")
+            signal.yield(.trouble("My memory isn't ready (\(error)); I'll work without it for now."))
+        }
         // The day's manager thread is kept open, so nobody waits for it to start, even on a new day.
         Task { [manager] in
             while !Task.isCancelled {

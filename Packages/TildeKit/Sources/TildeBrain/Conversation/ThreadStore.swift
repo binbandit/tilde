@@ -9,8 +9,15 @@ struct ThreadStore: Sendable {
         home.state.appending(path: "threads").appending(path: "\(day.day).json")
     }
 
+    /// A day's conversation. One that can't be read is set aside, never overwritten by the next save.
     func load(_ day: Date = .now) -> [Message] {
-        (try? Data(contentsOf: url(for: day))).flatMap { try? JSONDecoder().decode([Message].self, from: $0) } ?? []
+        let url = url(for: day)
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        if let messages = try? JSONDecoder().decode([Message].self, from: data) { return messages }
+        let aside = url.deletingPathExtension().appendingPathExtension("unreadable-\(Int(Date.now.timeIntervalSince1970)).json")
+        try? FileManager.default.moveItem(at: url, to: aside)
+        Log.info("state", "couldn't read \(url.lastPathComponent); set it aside as \(aside.lastPathComponent)")
+        return []
     }
 
     /// The end of the most recent earlier conversation in the past week, settled: what's still open

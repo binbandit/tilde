@@ -10,6 +10,9 @@ final class Listener {
     private var results: Task<Void, Never>?
     private var settled = ""
     private var volatile = ""
+    /// Counts listens. A start still setting up (finding the locale, the speech assets) when its hold
+    /// has already ended sees it's out of date and starts nothing.
+    private var generation = 0
 
     /// Called with the transcript so far and the mic level (0...1).
     var onUpdate: ((String, Double) -> Void)?
@@ -23,6 +26,8 @@ final class Listener {
     func start() async {
         settled = ""
         volatile = ""
+        generation += 1
+        let mine = generation
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
         do {
             let locale = await SpeechTranscriber.supportedLocale(equivalentTo: .current) ?? Locale(identifier: "en-US")
@@ -31,7 +36,7 @@ final class Listener {
                 try await request.downloadAndInstall()
             }
             let analyzer = SpeechAnalyzer(modules: [transcriber])
-            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else { return }
+            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]), generation == mine else { return }
             let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
             self.analyzer = analyzer
             input = continuation
@@ -53,6 +58,12 @@ final class Listener {
             }
 
             try await analyzer.start(inputSequence: stream)
+            // The hold may have ended while the analyzer started: then the microphone never opens.
+            guard generation == mine else {
+                continuation.finish()
+                results?.cancel()
+                return
+            }
             try startAudio(into: continuation, format: format)
         } catch {
             stopAudio()
@@ -61,6 +72,7 @@ final class Listener {
 
     /// Stops listening and returns everything heard.
     func finish() async -> String {
+        generation += 1
         stopAudio()
         input?.finish()
         try? await analyzer?.finalizeAndFinishThroughEndOfInput()

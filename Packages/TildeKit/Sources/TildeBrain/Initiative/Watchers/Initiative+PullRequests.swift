@@ -7,11 +7,26 @@ extension Initiative {
     func saw(_ fresh: [PullRequestWatch.Pull], at now: Date = .now) -> [Notice] {
         polledAt = now
         pulls = fresh
-        return transitions(fresh)
+        return transitions(fresh, now: now)
+    }
+
+    /// How long failing checks or a conflict must last before they're worth a word: in a busy repo
+    /// (a merge queue, a rebase in flight) most clear up on their own within minutes.
+    static let hold: TimeInterval = 15 * 60
+
+    /// Whether a trouble has lasted the hold, noting when it started and forgetting it once it's gone.
+    private func lasted(_ key: String, _ active: Bool, now: Date) -> Bool {
+        guard active else {
+            seen.since[key] = nil
+            return false
+        }
+        let since = seen.since[key] ?? now
+        seen.since[key] = since
+        return now.timeIntervalSince(since) >= Self.hold
     }
 
     /// PR state changes worth a word. Open PRs change state; merged ones only matter if main broke after.
-    func transitions(_ pulls: [PullRequestWatch.Pull]) -> [Notice] {
+    func transitions(_ pulls: [PullRequestWatch.Pull], now: Date = .now) -> [Notice] {
         var found: [Notice] = []
         for pull in pulls where !pull.merged {
             let subject = pull.id
@@ -21,8 +36,9 @@ extension Initiative {
             guard previous.count == 4 else { continue }
             let local = localPath(for: pull)
 
-            if pull.isMine, pull.checks == "FAILURE", previous[0] != "FAILURE" {
-                let failing = pull.failingChecks.prefix(4).joined(separator: ", ")
+            // Checks broken (not just waiting on an approval) for a while: one word per head commit.
+            if pull.isMine, lasted("\(subject):checks", pull.checksFailing, now: now) {
+                let failing = pull.failingChecks.filter { !PullRequestWatch.Pull.isGate($0) }.prefix(4).joined(separator: ", ")
                 found.append(Notice(
                     key: "\(subject):checks:\(pull.headOID)", subject: subject, urgency: .soon,
                     summary: "Checks failed on \(pull.label) \"\(pull.title)\"\(failing.isEmpty ? "" : ": \(failing)").",
@@ -30,16 +46,18 @@ extension Initiative {
             }
             if pull.isMine, pull.review == "CHANGES_REQUESTED", previous[1] != "CHANGES_REQUESTED" {
                 found.append(Notice(
-                    key: "\(subject):changes:\(pull.conversation)", subject: subject, urgency: .now,
+                    key: "\(subject):changes:\(pull.conversation)", subject: subject, urgency: .soon,
                     summary: "Changes were requested on \(pull.label) \"\(pull.title)\"\(pull.lastComment.map { ": \($0)" } ?? ".")",
                     url: pull.url, project: local, suggestion: "address the review feedback on branch \(pull.branch)"))
-            } else if Int(previous[3]).map({ pull.conversation > $0 }) ?? false, let comment = pull.lastComment, !pull.lastCommentIsMine {
+            } else if Int(previous[3]).map({ pull.conversation > $0 }) ?? false, let comment = pull.lastComment, !pull.lastCommentIsMine,
+                !pull.lastCommentIsBot
+            {
                 found.append(Notice(
                     key: "\(subject):comment:\(pull.conversation)", subject: subject, urgency: .soon,
                     summary: "New comment on \(pull.label) \"\(pull.title)\": \(comment)", url: pull.url, project: local,
                     suggestion: pull.isMine ? "reply to or address the comment" : nil))
             }
-            if pull.isMine, pull.mergeable == "CONFLICTING", previous[2] != "CONFLICTING" {
+            if pull.isMine, lasted("\(subject):conflict", pull.mergeable == "CONFLICTING", now: now) {
                 found.append(Notice(
                     key: "\(subject):conflict:\(pull.headOID)", subject: subject, urgency: .soon,
                     summary: "\(pull.label) \"\(pull.title)\" now conflicts with its base branch.", url: pull.url, project: local,

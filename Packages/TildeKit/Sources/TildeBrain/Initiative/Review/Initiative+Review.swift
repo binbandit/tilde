@@ -73,7 +73,7 @@ extension Initiative {
     /// Pull requests and agent sessions that changed since `date`, for the morning brief.
     func changes(since date: Date) -> [String] {
         pulls.filter { ($0.updatedAt ?? .distantPast) > date }.map(\.line)
-            + AgentWatch.waiting(since: date).map(\.line)
+            + AgentWatch.waiting(since: date, own: ownSessions).map(\.line)
     }
 }
 

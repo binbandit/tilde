@@ -14,7 +14,9 @@ struct TildeMark: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        TimelineView(.animation(paused: reduceMotion)) { context in
+        // Drawn once when it's still (ready, failed); otherwise a gentle 24 frames a second is plenty for a
+        // mark this size, and it may be on screen all day.
+        TimelineView(.animation(minimumInterval: 1 / 24, paused: reduceMotion || !moves)) { context in
             let t = context.date.timeIntervalSinceReferenceDate
             Wave(phase: phase(t), amplitude: amplitude(t))
                 .stroke(color, style: StrokeStyle(lineWidth: max(1.6, size * 0.13), lineCap: .round, lineJoin: .round))
@@ -22,7 +24,22 @@ struct TildeMark: View {
         }
         .frame(width: size, height: size * 0.62)
         .animation(Theme.spring, value: mood)
-        .accessibilityLabel("tilde")
+        .accessibilityLabel(label)
+    }
+
+    private var moves: Bool { mood != .done && mood != .failed }
+
+    /// What the mark is saying, for VoiceOver.
+    private var label: String {
+        switch mood {
+        case .idle: "tilde"
+        case .working: "tilde, agents working"
+        case .thinking: "tilde, thinking"
+        case .needsYou: "tilde, needs you"
+        case .done: "tilde, work ready"
+        case .failed: "tilde, something failed"
+        case .listening: "tilde, listening"
+        }
     }
 
     private var color: Color {

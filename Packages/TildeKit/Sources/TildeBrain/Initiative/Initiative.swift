@@ -29,6 +29,8 @@ public actor Initiative {
         var reviewed: Date?
         /// Open questions about PRs, by attention id, so they can withdraw when moot.
         var asks: [String: [Concern]] = [:]
+        /// When each PR trouble (failing checks, a conflict) was first seen, while it lasts.
+        var since: [String: Date] = [:]
     }
 
     let home: TildeHome
@@ -45,6 +47,8 @@ public actor Initiative {
     var mootCheckedAt = Date.distantPast
     /// Agents that the last look found waiting on the owner.
     var waiting: [AgentWatch.Waiting] = []
+    /// The sessions of tilde's own jobs, which aren't the owner's agents to be reminded of.
+    var ownSessions: Set<String> = []
     /// One background review at a time.
     var reviewing = false
 
@@ -109,7 +113,8 @@ public actor Initiative {
         }
         found += nudges(pulls, focusedRepo: focusedRepo)
         found += JobWatch.notices(jobs)
-        waiting = AgentWatch.waiting(since: .now.addingTimeInterval(-3 * 3600))
+        ownSessions = Set(jobs.compactMap(\.sessionID))
+        waiting = AgentWatch.waiting(since: .now.addingTimeInterval(-3 * 3600), own: ownSessions)
         found += waiting.map(\.notice)
         if !seen.baselined {
             seen.baselined = true
@@ -134,6 +139,7 @@ extension Initiative.Seen {
         checkIns = try c.decodeIfPresent([String: String].self, forKey: .checkIns) ?? [:]
         briefed = try c.decodeIfPresent(Date.self, forKey: .briefed)
         reviewed = try c.decodeIfPresent(Date.self, forKey: .reviewed)
-        asks = try c.decodeIfPresent([String: [Initiative.Concern]].self, forKey: .asks) ?? [:]
+        asks = (try? c.decodeIfPresent([String: [Initiative.Concern]].self, forKey: .asks)) ?? [:]
+        since = (try? c.decodeIfPresent([String: Date].self, forKey: .since)) ?? [:]
     }
 }

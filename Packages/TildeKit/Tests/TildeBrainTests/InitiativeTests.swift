@@ -61,15 +61,44 @@ import TildeWork
         #expect(await initiative.transitions([pull()]).isEmpty)  // first sighting just learns the state
         #expect(await initiative.transitions([pull()]).isEmpty)  // nothing changed
 
-        let failed = await initiative.transitions([pull(checks: "FAILURE", oid: "def")])
+        // Failing checks are worth a word once they've lasted: most clear up on their own in a busy repo.
+        let start = Date.now
+        #expect(await initiative.transitions([pull(checks: "FAILURE", oid: "def")], now: start).isEmpty)
+        let failed = await initiative.transitions([pull(checks: "FAILURE", oid: "def")], now: start.addingTimeInterval(16 * 60))
         #expect(failed.count == 1 && failed[0].summary.contains("lint") && failed[0].suggestion?.contains("nav") == true)
 
-        let reviewed = await initiative.transitions([pull(checks: "FAILURE", review: "CHANGES_REQUESTED", conversation: 2, comment: "Use the shared Button.", oid: "def")])
-        #expect(reviewed.map(\.urgency) == [.now])
-        #expect(reviewed[0].summary.contains("shared Button"))
+        let reviewed = await initiative.transitions(
+            [pull(checks: "FAILURE", review: "CHANGES_REQUESTED", conversation: 2, comment: "Use the shared Button.", oid: "def")],
+            now: start.addingTimeInterval(17 * 60))
+        #expect(reviewed.filter { $0.key.contains(":changes:") }.map(\.urgency) == [.soon])
+        #expect(reviewed.contains { $0.summary.contains("shared Button") })
 
         let green = await initiative.transitions([pull(checks: "SUCCESS", review: "APPROVED", conversation: 2, oid: "ghi")])
         #expect(green.contains { $0.summary.contains("approved and green") })
+    }
+
+    @Test func approvalGatesAndBotCommentsAreNotNews() async throws {
+        let initiative = try initiative()
+        var gated = pull(checks: "FAILURE")
+        gated.failingChecks = ["pullfrog-approval", "Mergify Merge Protections"]
+        _ = await initiative.transitions([gated])
+        let start = Date.now
+        gated.conversation = 3
+        gated.lastComment = "Merge Queue Status: queued"
+        gated.lastCommentIsBot = true
+        #expect(await initiative.transitions([gated], now: start.addingTimeInterval(20 * 60)).isEmpty)
+        #expect(!gated.checksFailing && gated.standing.contains("waiting on approval"))
+    }
+
+    @Test func aConflictThatClearsQuicklyIsNeverRaised() async throws {
+        let initiative = try initiative()
+        let start = Date.now
+        _ = await initiative.transitions([pull()], now: start)
+        #expect(await initiative.transitions([pull(mergeable: "CONFLICTING")], now: start.addingTimeInterval(60)).isEmpty)
+        #expect(await initiative.transitions([pull(mergeable: "MERGEABLE")], now: start.addingTimeInterval(240)).isEmpty)
+        #expect(await initiative.transitions([pull(mergeable: "CONFLICTING")], now: start.addingTimeInterval(600)).isEmpty)
+        let raised = await initiative.transitions([pull(mergeable: "CONFLICTING")], now: start.addingTimeInterval(600 + 16 * 60))
+        #expect(raised.map { $0.key.contains(":conflict:") } == [true])
     }
 
     @Test func reviewRequestsFromBotsWaitUntilYouLook() async throws {

@@ -144,9 +144,10 @@ final class LaunchLog: Sendable {
         _ = await call(first, "ask", ["question": "Merge app#7?", "options": ["Merge", "Not now"]])
         let asked = try #require(first.attention.first)
 
-        // The next launch, on a new day's empty thread: still open, and still there to answer.
+        // The next launch (which restores it), on a new day's empty thread: still open, and still there to answer.
         let next = try Conductor(home: first.home, config: config)
-        next.restore()
+        #expect(next.attention.map(\.id) == [asked.id])
+        next.thread = []
         next.reconcileQuestions()
         #expect(next.attention.map(\.id) == [asked.id])
         #expect(next.thread.map(\.attentionID) == [asked.id])
@@ -163,7 +164,7 @@ final class LaunchLog: Sendable {
 
         // Its worker had finished its turn; a restart leaves it waiting on the question, not working again.
         let next = try Conductor(home: first.home, config: config)
-        next.restore()
+        next.resumeActive()
         #expect(next.jobs.first?.phase == .needsYou)
         #expect(next.attention.map(\.jobID) == [job.id])
     }

@@ -25,9 +25,16 @@ public enum Rails {
     }
 
     private static let outward: [(pattern: String, reason: String)] = [
-        (#"\bgit\s+push\b"#, "Pushes to a remote"),
-        (#"\bgh\s+(pr|release|repo|issue)\s+(create|merge|close|delete|edit|comment|review)\b"#, "Changes something on GitHub"),
-        (#"\bgh\s+api\b.*-X\s*(POST|PUT|PATCH|DELETE)"#, "Changes something on GitHub"),
+        // Options can sit between git and its command (git -c x=y push, git -C dir push).
+        (#"\bgit(\s+(-c|-C)\s+\S+|\s+--[a-z-]+(=\S+)?)*\s+push\b"#, "Pushes to a remote"),
+        // Kite publishes, opens PRs, and may force-push when it undoes a published land.
+        (#"\bkt\s+(publish|pr|undo)\b"#, "Pushes to a remote"),
+        (#"\bkt\s+land\b.*--push\b"#, "Pushes to a remote"),
+        (#"\bgh\s+(pr|release|repo|issue)\s+(create|merge|close|delete|edit|comment|review|reopen|upload|fork)\b"#, "Changes something on GitHub"),
+        (#"\bgh\s+(workflow\s+(run|enable|disable)|run\s+(rerun|cancel|delete)|secret\s+(set|delete)|variable\s+(set|delete)|label\s+(create|edit|delete)|gist\s+(create|edit|delete)|ruleset|cache\s+delete)\b"#, "Changes something on GitHub"),
+        // gh api writes with an explicit method, or implicitly by sending fields.
+        (#"\bgh\s+api\b.*(-X|--method)[\s=]*(POST|PUT|PATCH|DELETE)"#, "Changes something on GitHub"),
+        (#"\bgh\s+api\b.*\s(-f|-F|--field|--raw-field|--input)\b"#, "Changes something on GitHub"),
         (#"\b(npm|pnpm|yarn|bun|cargo|gem|twine|pod)\s+(publish|trunk\s+push)\b"#, "Publishes a package"),
         (#"\b(vercel|netlify|wrangler|firebase|fly|flyctl|heroku|railway)\b.*\b(deploy|publish|--prod)\b"#, "Deploys"),
         (#"\b(kubectl|helm)\s+(apply|delete|install|upgrade|rollout)\b"#, "Changes a cluster"),
@@ -35,7 +42,8 @@ public enum Rails {
         (#"\bdocker\s+push\b"#, "Pushes an image"),
         (#"\b(aws|gcloud|az)\s"#, "Talks to a cloud account"),
         (#"\bsudo\b"#, "Runs as root"),
-        (#"\b(ssh|scp|rsync)\s+\S*@"#, "Reaches another machine"),
+        (#"\b(ssh|scp|sftp)\s"#, "Reaches another machine"),
+        (#"\brsync\b.*\s\S*[A-Za-z0-9_.-]+:"#, "Reaches another machine"),
         (#"\bxcrun\s+(altool|notarytool)\b"#, "Submits to Apple"),
         (#"(curl|wget)[^|]*\|\s*(sh|bash|zsh)\b"#, "Pipes a download into a shell"),
     ]

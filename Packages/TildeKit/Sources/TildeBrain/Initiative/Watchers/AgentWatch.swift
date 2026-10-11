@@ -12,12 +12,15 @@ enum AgentWatch {
         var lastWords: String
     }
 
-    static func waiting(since: Date, quiet: TimeInterval = 5 * 60) -> [Waiting] {
+    /// `own`: the sessions of tilde's own jobs, which are tilde's to report, not yours to be reminded of
+    /// (one working in your checkout looks just like a session you started).
+    static func waiting(since: Date, quiet: TimeInterval = 5 * 60, own: Set<String> = []) -> [Waiting] {
         let home = URL(fileURLWithPath: NSHomeDirectory())
         let now = Date.now
         var found: [Waiting] = []
         let claude = recent(home.appending(path: ".claude/projects"), since: since)
-        for (url, modified) in claude where now.timeIntervalSince(modified) > quiet {
+        let mine = { (url: URL) in own.contains { url.lastPathComponent.contains($0) } }
+        for (url, modified) in claude where now.timeIntervalSince(modified) > quiet && !mine(url) {
             guard let tail = lastLines(url), let last = tail.last(where: { ["assistant", "user"].contains($0["type"]?.string) }),
                 last["type"]?.string == "assistant", last["message"]?["stop_reason"]?.string == "end_turn",
                 let cwd = last["cwd"]?.string, !cwd.contains("/.tilde/"), !cwd.contains("/T/"), !cwd.contains("/tmp/")
@@ -28,9 +31,9 @@ enum AgentWatch {
                 lastWords: text.clipped(to: 140)))
         }
         let codex = recent(home.appending(path: ".codex/sessions"), since: since)
-        for (url, modified) in codex where now.timeIntervalSince(modified) > quiet {
+        for (url, modified) in codex where now.timeIntervalSince(modified) > quiet && !mine(url) {
             guard let tail = lastLines(url), let done = tail.last, done["payload"]?["type"]?.string == "task_complete" else { continue }
-            let head = (try? String(contentsOf: url, encoding: .utf8))?.split(separator: "\n").first.flatMap { JSON.parse(String($0)) }
+            let head = firstLine(url)
             guard let cwd = head?["payload"]?["cwd"]?.string, !cwd.contains("/.tilde/"), !cwd.contains("/tmp/"), !cwd.contains("/T/") else { continue }
             found.append(Waiting(
                 harness: "Codex", session: url.deletingPathExtension().lastPathComponent, cwd: cwd, finishedAt: modified,
@@ -47,6 +50,14 @@ enum AgentWatch {
             if modified > since { files.append((url, modified)) }
         }
         return files
+    }
+
+    /// A transcript's first JSON line, read from the start (some transcripts run to hundreds of megabytes).
+    private static func firstLine(_ url: URL, bytes: Int = 512_000) -> JSON? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        let data = (try? handle.read(upToCount: bytes)) ?? Data()
+        return String(decoding: data, as: UTF8.self).split(separator: "\n").first.flatMap { JSON.parse(String($0)) }
     }
 
     /// The last few JSON lines of a transcript, read from the end.

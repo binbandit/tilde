@@ -31,6 +31,8 @@ enum PullRequestWatch {
         var closed = false
         /// A bot opened it (dependabot, renovate, github-actions, any `[bot]`).
         var authorIsBot = false
+        /// The last comment is a bot's (a merge queue's status, a CI summary).
+        var lastCommentIsBot = false
         var updatedAt: Date?
         var mergedAt: Date?
 
@@ -57,7 +59,7 @@ enum PullRequestWatch {
           number title url state headRefName mergeable reviewDecision updatedAt mergedAt
           author { login __typename }
           repository { nameWithOwner name defaultBranchRef { name target { ... on Commit { oid statusCheckRollup { state } } } } }
-          comments(last: 1) { totalCount nodes { author { login } bodyText } }
+          comments(last: 1) { totalCount nodes { author { login __typename } bodyText } }
           reviewThreads { totalCount }
           commits(last: 1) { nodes { commit { oid statusCheckRollup { state contexts(first: 30) { nodes {
             ... on CheckRun { name conclusion } ... on StatusContext { context state } } } } } } }
@@ -65,9 +67,8 @@ enum PullRequestWatch {
         """
 
     static func fetch() async -> [Pull]? {
-        guard let output = try? await Shell.check(["gh", "api", "graphql", "-f", "query=\(query)"]), let json = JSON.parse(output)
-        else { return nil }
-        return pulls(from: json)
+        guard let output = await graphql(query) else { return nil }
+        return pulls(from: output)
     }
 
     /// One PR by id (`owner/repo#12`), wherever it stands: for the ones that dropped off the lists above.
@@ -75,10 +76,16 @@ enum PullRequestWatch {
         guard let match = id.firstMatch(of: /^([^\/]+)\/([^#]+)#(\d+)$/) else { return nil }
         let query = "query { viewer { login } repository(owner: \"\(match.1)\", name: \"\(match.2)\") "
             + "{ pullRequest(number: \(match.3)) { ...pr } } }\n" + fragment
-        guard let output = try? await Shell.check(["gh", "api", "graphql", "-f", "query=\(query)"]), let json = JSON.parse(output),
-            let node = json["data"]?["repository"]?["pullRequest"]
+        guard let json = await graphql(query), let node = json["data"]?["repository"]?["pullRequest"]
         else { return nil }
         return pull(node, me: json["data"]?["viewer"]?["login"]?.string ?? "", requested: false)
+    }
+
+    /// One GraphQL read, given up on after 45 seconds: a hung `gh` mustn't stall everything that waits on the watchers.
+    private static func graphql(_ query: String) async -> JSON? {
+        guard let output = try? await Shell.run(["gh", "api", "graphql", "-f", "query=\(query)"], timeout: .seconds(45)), output.ok
+        else { return nil }
+        return JSON.parse(output.stdout)
     }
 
     /// Your open PRs, the ones you merged in the last day, and PRs waiting on your review.
@@ -124,6 +131,8 @@ enum PullRequestWatch {
             defaultBranchOID: defaultTarget?["oid"]?.string.map { String($0.prefix(10)) },
             merged: node["state"]?.string == "MERGED", closed: node["state"]?.string == "CLOSED",
             authorIsBot: isBot(login: author, type: node["author"]?["__typename"]?.string),
+            lastCommentIsBot: isBot(
+                login: lastComment?["author"]?["login"]?.string ?? "", type: lastComment?["author"]?["__typename"]?.string),
             updatedAt: node["updatedAt"]?.string.flatMap { try? Date($0, strategy: .iso8601) },
             mergedAt: node["mergedAt"]?.string.flatMap { try? Date($0, strategy: .iso8601) })
     }
@@ -144,9 +153,19 @@ extension PullRequestWatch.Pull {
     /// What's wrong with it that someone could fix.
     enum Trouble: String, Codable, Sendable { case checks, conflict, changes }
 
+    /// A check that's a gate waiting on a person (an approval, a merge protection), not code that's broken.
+    static func isGate(_ check: String) -> Bool {
+        check.range(of: "approv|merge protection|mergify|merge queue|required review|codeowner", options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Checks failing for a reason a change could fix: not just gates waiting on someone's approval.
+    var checksFailing: Bool {
+        ["FAILURE", "ERROR"].contains(checks) && (failingChecks.isEmpty || failingChecks.contains { !Self.isGate($0) })
+    }
+
     var troubles: Set<Trouble> {
         var troubles: Set<Trouble> = []
-        if ["FAILURE", "ERROR"].contains(checks) { troubles.insert(.checks) }
+        if checksFailing { troubles.insert(.checks) }
         if mergeable == "CONFLICTING" { troubles.insert(.conflict) }
         if review == "CHANGES_REQUESTED" { troubles.insert(.changes) }
         return troubles
@@ -155,7 +174,7 @@ extension PullRequestWatch.Pull {
     /// Whether a trouble is over, not just quiet: checks that are running again haven't passed yet.
     func isPast(_ trouble: Trouble) -> Bool {
         switch trouble {
-        case .checks: checks == "SUCCESS"
+        case .checks: !checksFailing && checks != "PENDING" && checks != "EXPECTED"
         case .conflict: mergeable == "MERGEABLE"
         case .changes: review != "CHANGES_REQUESTED"
         }
@@ -169,7 +188,12 @@ extension PullRequestWatch.Pull {
         var parts: [String] = []
         switch checks {
         case "FAILURE", "ERROR":
-            parts.append("checks failing" + (failingChecks.isEmpty ? "" : " (\(failingChecks.prefix(3).joined(separator: ", ")))"))
+            let broken = failingChecks.filter { !Self.isGate($0) }
+            if checksFailing {
+                parts.append("checks failing" + (broken.isEmpty ? "" : " (\(broken.prefix(3).joined(separator: ", ")))"))
+            } else {
+                parts.append("waiting on approval checks (\(failingChecks.prefix(3).joined(separator: ", ")))")
+            }
         case "PENDING", "EXPECTED": parts.append("checks running")
         case "SUCCESS": parts.append("checks green")
         default: break

@@ -126,9 +126,16 @@ public actor CodexSession {
 
     // MARK: JSON-RPC
 
-    private func request(_ method: String, _ params: JSON) async throws -> JSON {
+    /// One JSON-RPC request. A Codex that never answers (stuck behind a prompt, say) fails it after `timeout`
+    /// rather than holding up everything waiting on it.
+    private func request(_ method: String, _ params: JSON, timeout: Duration = .seconds(120)) async throws -> JSON {
         nextID += 1
         let id = nextID
+        let deadline = Task { [weak self] in
+            try? await Task.sleep(for: timeout)
+            await self?.expire(id, method)
+        }
+        defer { deadline.cancel() }
         let result = await withCheckedContinuation { continuation in
             pending[id] = continuation
             do {
@@ -139,6 +146,10 @@ public actor CodexSession {
             }
         }
         return try result.get()
+    }
+
+    private func expire(_ id: Int, _ method: String) {
+        pending.removeValue(forKey: id)?.resume(returning: .failure(Failure(description: "Codex didn't answer \(method)")))
     }
 
     private func notify(_ method: String) throws {

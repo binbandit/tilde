@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // A hung app answers accessibility calls slowly, and tilde asks often: a quarter of a second each, not six.
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.25)
         model.conductor?.perception = perception
         perception.start()
 
