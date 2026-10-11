@@ -35,6 +35,8 @@ final class InletController {
     @ObservationIgnored private var observers: [Any] = []
     /// tilde's messages already shown, so each peeks out once.
     @ObservationIgnored private var seen: Set<String>
+    /// A job opened from the conversation closes back to it, as a detail does in a messaging app.
+    @ObservationIgnored private var backToConversation = false
 
     init(model: AppModel, lens: LensController) {
         self.model = model
@@ -48,7 +50,7 @@ final class InletController {
             send: { [weak self] in self?.send($0) },
             openJob: { [weak self] in self?.openJob($0) },
             compose: { [weak self] in if self?.inlet.mode != .compose { self?.set(.compose) } },
-            dismiss: { [weak self] in self?.set(.rest) })
+            dismiss: { [weak self] in self?.dismiss() })
     }
 
     // MARK: Showing
@@ -159,7 +161,20 @@ final class InletController {
         }
     }
 
-    func openJob(_ job: Job, focus: Bool = true) { set(.job(job.id), focus: focus) }
+    func openJob(_ job: Job, focus: Bool = true) {
+        backToConversation = inlet.isConversation
+        set(.job(job.id), focus: focus)
+    }
+
+    /// Put away what's showing: a job opened from the conversation goes back to it; anything else, to rest.
+    private func dismiss() {
+        if case .job = inlet.mode, backToConversation {
+            backToConversation = false
+            set(.open)
+        } else {
+            set(.rest)
+        }
+    }
 
     /// New words from tilde peek out of the edge, unless the conversation is
     /// already open; the peek settles once it's been read.
