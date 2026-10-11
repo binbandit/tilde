@@ -168,6 +168,21 @@ final class LaunchLog: Sendable {
         #expect(next.attention.map(\.jobID) == [job.id])
     }
 
+    @Test func wordsThatNeverReachTheModelSaySoAndCanBeSentAgain() async throws {
+        var config = config
+        config.initiative = false
+        let conductor = try Conductor(home: TildeHome(root: root.appending(path: "home")), config: config)
+        try await conductor.start()  // its manager is /usr/bin/false: nothing gets through
+
+        conductor.tap("how many PRs are open?", context: TapContext(pointing: "oh-fx · Ghostty"))
+        try await waitFor(conductor) { conductor.thread.first?.delivery.map { if case .failed = $0 { true } else { false } } ?? false }
+        #expect(conductor.thread.map(\.from) == [.you])  // no empty reply left waiting
+
+        conductor.retry(conductor.thread[0].id)
+        #expect(conductor.thread.map(\.text) == ["how many PRs are open?", ""])
+        #expect(conductor.thread[0].delivery == .sent && conductor.thread[0].pointing == "oh-fx · Ghostty")
+    }
+
     @Test func scratchJobsNeedNoRepo() async throws {
         let conductor = try await makeConductor()
         let started = await call(conductor, "delegate", ["title": "Check the app", "brief": "Look at it", "harness": "scripted"])

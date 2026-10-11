@@ -9,6 +9,16 @@ import TildeSupport
 public struct Message: Identifiable, Codable, Sendable, Hashable {
     public enum From: String, Codable, Sendable { case you, tilde }
 
+    /// Where something you said has got to.
+    public enum Delivery: Codable, Sendable, Hashable {
+        /// Waiting for tilde, which is in the middle of something.
+        case sent
+        /// tilde has it.
+        case read(Date)
+        /// It never reached tilde's model, and why.
+        case failed(String)
+    }
+
     public let id: String
     public var from: From
     public var text: String
@@ -29,6 +39,8 @@ public struct Message: Identifiable, Codable, Sendable, Hashable {
     public var settled: String?
     /// While tilde works on this reply and has nothing to say yet: what it's doing ("Checking GitHub").
     public var activity: String?
+    /// For what you said to tilde: whether it has it yet.
+    public var delivery: Delivery?
 
     public init(
         id: String? = nil, from: From, text: String, at: Date = .now, pointing: String? = nil, jobs: [String] = [],

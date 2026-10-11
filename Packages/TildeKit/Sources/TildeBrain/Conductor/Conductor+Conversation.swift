@@ -12,7 +12,10 @@ extension Conductor {
     public func tap(_ text: String, context: TapContext = TapContext()) -> String {
         let id = IDs.make("t")
         Task { await dreamer.catchUp() }
-        append(Message(from: .you, text: text, pointing: context.pointing, jobs: context.jobID.map { [$0] } ?? []))
+        var said = Message(from: .you, text: text, pointing: context.pointing, jobs: context.jobID.map { [$0] } ?? [])
+        said.delivery = .sent
+        unread[id] = (said.id, context)
+        append(said)
         append(Message(id: id, from: .tilde, text: "", streaming: true))
         replying = id
         let attributes = ([("at", Date.now.formatted(date: .omitted, time: .shortened))] + context.attributes)
@@ -23,8 +26,9 @@ extension Conductor {
         }
         Task {
             // Questions about PRs are common enough that what tilde last saw rides along, so most need no tool.
-            if text.contains(/(?i)\b(PRs?|pull requests?|reviews?|CI|checks)\b/) {
-                let watching = await initiative.watchingNow()
+            // Only what it already has: the message never waits on GitHub.
+            if initiativeEnabled, text.contains(/(?i)\b(PRs?|pull requests?|reviews?|CI|checks)\b/) {
+                let watching = await initiative.watching()
                 if !watching.isEmpty { body += "\n<pull_requests>\n\(watching)\n</pull_requests>" }
             }
             await manager.post(.init(
@@ -33,6 +37,15 @@ extension Conductor {
                 jobs: context.jobID.map { [$0] } ?? []))
         }
         return id
+    }
+
+    /// Says again something that never reached tilde, with what you were pointing at then.
+    public func retry(_ messageID: String) {
+        guard let i = thread.firstIndex(where: { $0.id == messageID }), case .failed = thread[i].delivery else { return }
+        let said = thread.remove(at: i)
+        let context = unread.first { $0.value.message == messageID }
+        if let context { unread[context.key] = nil }
+        tap(said.text, context: context?.value.context ?? TapContext(pointing: said.pointing))
     }
 
     /// Brayden answered an escalation. `always` turns the answer into a standing rule.
@@ -106,6 +119,12 @@ extension Conductor {
         switch output {
         case .reply(let taps, let text):
             for tap in taps { writeReply(tap, text, done: false) }
+        case .read(let taps):
+            for tap in taps {
+                guard let said = unread.removeValue(forKey: tap)?.message, let i = thread.firstIndex(where: { $0.id == said }) else { continue }
+                thread[i].delivery = .read(.now)
+            }
+            saveThread()
         case .activity(let taps, let text):
             for tap in taps {
                 if let i = thread.firstIndex(where: { $0.id == tap }), thread[i].streaming { thread[i].activity = text }
@@ -121,6 +140,16 @@ extension Conductor {
         case .trouble(let text):
             trouble = text
             signal.yield(.trouble(text))
+            // What you said never reached the model: it says so under your words, with a way to try again.
+            if let replying, let said = unread[replying]?.message, let i = thread.firstIndex(where: { $0.id == said }),
+                let reply = thread.firstIndex(where: { $0.id == replying }), thread[reply].text.isEmpty
+            {
+                thread[i].delivery = .failed(text)
+                thread.remove(at: reply)
+                self.replying = nil
+                saveThread()
+                return
+            }
             if let replying, let i = thread.firstIndex(where: { $0.id == replying }), thread[i].text.isEmpty {
                 thread[i].text = text
                 thread[i].trouble = true

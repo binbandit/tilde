@@ -30,6 +30,8 @@ public actor Manager: CodexHost {
         case replyDone(taps: [String], text: String)
         /// What the turn is doing right now ("Checking GitHub"), for the taps waiting on it.
         case activity(taps: [String], text: String)
+        /// The model has these taps now, in a turn or steered into one.
+        case read(taps: [String])
         case trouble(String)
     }
 
@@ -112,6 +114,7 @@ public actor Manager: CodexHost {
         }
         guard turn != nil else { return requeue(message) }
         Log.info("manager", "steered in: \(message.text.clipped(to: 200))")
+        emit.yield(.read(taps: [tap]))
         turn?.append(tap)
         asked += "\n\n" + text
         streaming = ""
@@ -159,6 +162,7 @@ public actor Manager: CodexHost {
             let session = try await ensureSession()
             asked = await withBriefing(text, paths: batch.flatMap(\.paths), jobs: Array(Set(batch.flatMap(\.jobs))))
             try await session.send(asked, effort: config.effort)
+            emit.yield(.read(taps: batch.compactMap(\.tap)))
             watch()
         } catch {
             emit.yield(.trouble("I couldn't reach Codex: \(error)"))

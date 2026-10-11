@@ -54,9 +54,11 @@ public final class Conductor {
     @ObservationIgnored var replying: String?
     /// Taps whose reply only appears if tilde actually says something (welcome-backs).
     @ObservationIgnored var quietTaps: Set<String> = []
-    @ObservationIgnored private let initiativeEnabled: Bool
+    @ObservationIgnored let initiativeEnabled: Bool
     /// The day `thread` belongs to.
     @ObservationIgnored var threadDay = Date.now
+    /// What you said, by the id of tilde's reply to it, until tilde has it.
+    @ObservationIgnored var unread: [String: (message: String, context: TapContext)] = [:]
 
     public struct Config: Sendable {
         public var manager = Manager.Config()

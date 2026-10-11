@@ -27,9 +27,12 @@ import WorkerKit
         // Brayden asks something while that turn runs: it's steered in, and the answer is his.
         await manager.post(.init("<tap>how many PRs are open?</tap>", tap: "t-1"))
         var answer: ([String], String)?
+        var read: [String] = []
         for await output in manager.outputs {
+            if case .read(let taps) = output { read += taps }
             if case .replyDone(let taps, let text) = output { answer = (taps, text); break }
         }
+        #expect(read == ["t-1"])
         #expect(answer?.0 == ["t-1"])
         #expect(answer?.1 == "You said: <tap>how many PRs are open?</tap>")
         #expect(methods(out).filter { $0.hasPrefix("turn/") } == ["turn/start", "turn/interrupt", "turn/start", "turn/steer"])
