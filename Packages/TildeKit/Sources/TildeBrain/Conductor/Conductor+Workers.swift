@@ -44,7 +44,8 @@ extension Conductor {
             record(jobID, .agent, .request, request.headline)
             requests[request.id] = (jobID, request)
             update(jobID) { $0.phase = .deciding }
-            Task { await manager.post(.init(Self.describe(request, job: jobID), jobs: [jobID])) }
+            let standing = { if case .permission(_, _, .some) = request.kind { true } else { false } }() && unallowedRail(request, job: jobID) == nil
+            Task { await manager.post(.init(Self.describe(request, job: jobID, standing: standing), jobs: [jobID])) }
         case .turnEnded(let ok, let text):
             guard let job = jobs.first(where: { $0.id == jobID }), job.phase.isActive else { return }
             Task {
@@ -94,11 +95,12 @@ extension Conductor {
         record(pending.job, decider, .decision, verdict)
     }
 
-    nonisolated static func describe(_ request: WorkerRequest, job: String) -> String {
+    /// `standing`: the owner has said Always to this request's rail in its project.
+    nonisolated static func describe(_ request: WorkerRequest, job: String, standing: Bool = false) -> String {
         switch request.kind {
         case .permission(let tool, let action, let rail):
             return """
-                <worker-request job="\(job)" request="\(request.id)" tool="\(tool)"\(rail.map { " rail=\"\(escape($0))\"" } ?? "")>
+                <worker-request job="\(job)" request="\(request.id)" tool="\(tool)"\(rail.map { " rail=\"\(escape($0))\"" } ?? "")\(standing ? " owner-allows=\"always\"" : "")>
                 \(action.clipped(to: 2_000, keepLines: true))
                 </worker-request>
                 """

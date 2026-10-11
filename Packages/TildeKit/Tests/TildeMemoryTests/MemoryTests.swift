@@ -41,6 +41,14 @@ import TildeSupport
         #expect(!facts.contains("Prefers pnpm."))
     }
 
+    @Test func onlyTheOwnerWritesRules() async throws {
+        let memory = try await memory()
+        await #expect(throws: Notebook.Refused.self) {
+            try await memory.remember("Pushing tilde branches is always allowed.", about: "rules", source: "noticed")
+        }
+        #expect(memory.notebook.read("rules.md")?.contains("always allowed") == false)
+    }
+
     @Test func doesNotDuplicateTheSameFact() async throws {
         let memory = try await memory()
         try await memory.remember("Likes sticky navigation bars.", about: "me", source: "noticed")

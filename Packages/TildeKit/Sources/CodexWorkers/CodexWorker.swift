@@ -80,13 +80,14 @@ public actor CodexWorker: Worker, CodexHost {
     // MARK: CodexHost
 
     public func approveCommand(_ command: String, cwd: String?, reason: String?) async -> Bool {
-        let rail = Rails.check(tool: "Bash", input: ["command": .string(command)], workdir: workdir)
-        return await ask(.permission(tool: "Shell", action: command, rail: rail ?? reason)).isAllow
+        // Codex asks only to run something beyond its sandbox, which is a rail whatever the command.
+        let rail = Rails.check(tool: "Bash", input: ["command": .string(command)], workdir: workdir) ?? Rails.outsideSandbox
+        return await ask(.permission(tool: "Shell", action: command + Self.saying(reason), rail: rail)).isAllow
     }
 
     public func approveFileChange(reason: String?, root: String?) async -> Bool {
-        let action = root.map { "write under \($0)" } ?? "write files outside the sandbox"
-        return await ask(.permission(tool: "Edit", action: action, rail: reason ?? "Writes outside the job's worktree")).isAllow
+        let action = (root.map { "write under \($0)" } ?? "write files outside the sandbox") + Self.saying(reason)
+        return await ask(.permission(tool: "Edit", action: action, rail: "Writes outside the job's worktree")).isAllow
     }
 
     public func approveToolUse(connector: String, message: String) async -> Bool {
@@ -94,8 +95,13 @@ public actor CodexWorker: Worker, CodexHost {
     }
 
     public func approvePermissions(reason: String?, requested: JSON) async -> Bool {
-        let action = "extra sandbox permissions: \(requested.compact.clipped(to: 300))"
-        return await ask(.permission(tool: "Sandbox", action: action, rail: reason ?? "Steps outside the job's sandbox")).isAllow
+        let action = "extra sandbox permissions: \(requested.compact.clipped(to: 300))" + Self.saying(reason)
+        return await ask(.permission(tool: "Sandbox", action: action, rail: "Steps outside the job's sandbox")).isAllow
+    }
+
+    /// Codex's own reason, as context for whoever decides (never as the rail).
+    private static func saying(_ reason: String?) -> String {
+        reason.map { $0.isEmpty ? "" : "\n(Codex says: \($0))" } ?? ""
     }
 
     public func answer(_ questions: [WorkerQuestion]) async -> [String]? {

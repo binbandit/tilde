@@ -52,6 +52,7 @@ extension Conductor {
     public func answer(_ attentionID: String, with reply: String, always: Bool = false) {
         guard let index = attention.firstIndex(where: { $0.id == attentionID }) else { return }
         let item = attention.remove(at: index)
+        let asked = item.requestID.flatMap { requests[$0] }
         signal.yield(.resolved(attentionID: item.id))
         persist()
 
@@ -76,7 +77,13 @@ extension Conductor {
 
         let job = item.jobID.flatMap { id in jobs.first { $0.id == id } }
         if always, let job {
-            Task { try? await memory.notebook.addRule("\(reply) when asked \"\(item.question)\" in \(job.projectName).") }
+            // "Always" to a rail is kept as exactly that rail in that project, which is all it covers.
+            if let asked, case .permission(_, _, let rail?) = asked.request.kind, WorkerAnswer.isYes(reply) {
+                allowAlways(rail, job: job.id)
+                Task { try? await memory.notebook.addRule("Always allowed in \(job.projectName): \(rail).") }
+            } else {
+                Task { try? await memory.notebook.addRule("\(reply) when asked \"\(item.question)\" in \(job.projectName).") }
+            }
         }
         if let jobID = item.jobID {
             log.append(jobID, "\(Owner.firstName) answered \"\(item.question)\": \(reply)")

@@ -117,6 +117,10 @@ public actor Memory {
             throw Notebook.Refused(description: "That looks like a secret; tilde doesn't keep those.")
         }
         var note = await note(about: about, kind: kind)
+        // Rules are permissions: only the owner adds one (Notebook.addRule, from their "Always").
+        guard note.path != "rules.md" else {
+            throw Notebook.Refused(description: "Rules are \(Owner.firstName)'s to write; ask them, or note it as a preference instead.")
+        }
         let stamp = "\(Date.now.day), \(source)"
 
         let old = supersededFact(in: note, by: fact, hint: replaces)
@@ -142,6 +146,7 @@ public actor Memory {
 
     /// Replaces a whole note (the dream and the manager's rewrites).
     public func rewrite(_ path: String, _ text: String, reason: String) async throws {
+        guard path != "rules.md" else { throw Notebook.Refused(description: "Rules are \(Owner.firstName)'s to write.") }
         let url = notebook.url.appending(path: path)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try text.write(to: url, atomically: true, encoding: .utf8)

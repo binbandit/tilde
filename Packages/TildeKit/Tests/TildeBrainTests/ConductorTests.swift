@@ -215,6 +215,27 @@ final class LaunchLog: Sendable {
         return path
     }
 
+    @Test func onlyTheOwnerAllowsARail() async throws {
+        let conductor = try await makeConductor()
+        _ = await call(conductor, "delegate", ["project_path": .string(repo), "title": "Ship it", "brief": "Add a nav and push", "harness": "scripted"])
+        let job = try #require(conductor.jobs.first)
+        try await waitFor(conductor) { conductor.jobs.first?.phase == .deciding }
+
+        // The manager can't wave a push through...
+        let waved = await call(conductor, "respond", ["request": "r-push", "decision": "allow"])
+        #expect(waved.isError && waved.text.contains("Pushes to a remote"))
+
+        // ...the owner can, and "Always" then covers exactly that rail in that project.
+        _ = await call(conductor, "ask", ["question": "Push the nav?", "options": ["Allow", "Don't allow"], "request": "r-push"])
+        let item = try #require(conductor.attention.first)
+        conductor.answer(item.id, with: "Allow", always: true)
+        try await waitFor(conductor) { conductor.attention.isEmpty && conductor.jobs.first?.phase != .needsYou }
+        let push = WorkerRequest(id: "r-2", kind: .permission(tool: "Bash", action: "git push", rail: "Pushes to a remote"))
+        let deploy = WorkerRequest(id: "r-3", kind: .permission(tool: "Bash", action: "vercel deploy --prod", rail: "Deploys"))
+        #expect(conductor.unallowedRail(push, job: job.id) == nil)
+        #expect(conductor.unallowedRail(deploy, job: job.id) == "Deploys")
+    }
+
     @Test func scratchJobsNeedNoRepo() async throws {
         let conductor = try await makeConductor()
         let started = await call(conductor, "delegate", ["title": "Check the app", "brief": "Look at it", "harness": "scripted"])

@@ -65,9 +65,13 @@ public enum WorkerAnswer: Sendable {
 
     public var isAllow: Bool { if case .allow = self { true } else { false } }
 
-    /// Whether a free-text reply reads as yes ("Allow", "yes please"), for yes-or-no questions.
+    /// Whether a free-text reply is a plain yes ("Allow", "yes please"), for yes-or-no questions. The
+    /// whole reply has to be one: "ok but not to main" and "do not push" are not.
     public static func isYes(_ reply: String) -> Bool {
-        let word = reply.lowercased().split { !$0.isLetter }.first.map(String.init) ?? ""
-        return ["allow", "yes", "yep", "approve", "approved", "ok", "okay", "sure", "go", "do", "fine", "y"].contains(word)
+        let words = reply.lowercased().split { !$0.isLetter }.joined(separator: " ")
+        return [
+            "allow", "allow it", "yes", "yes please", "yep", "yeah", "y", "approve", "approved", "ok", "okay", "sure",
+            "go ahead", "do it", "fine",
+        ].contains(words)
     }
 }

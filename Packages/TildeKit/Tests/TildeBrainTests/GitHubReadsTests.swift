@@ -7,7 +7,7 @@ import Testing
             ["pr", "view", "796", "-R", "binbandit/oh-fx", "--comments"],
             ["search", "prs", "--repo", "binbandit/oh-fx", "--state", "open"],
             ["api", "repos/binbandit/oh-fx/pulls/796/comments"],
-            ["api", "-X", "GET", "repos/binbandit/oh-fx/pulls"],
+            ["api", "repos/binbandit/oh-fx/pulls", "-X", "GET", "--paginate", "--jq", ".[].number"],
             ["api", "graphql", "-f", "query=query { viewer { login } }"],
         ] {
             #expect(GitHubReads.refusal(args) == nil, "\(args)")
@@ -24,6 +24,12 @@ import Testing
             ["api", "repos/binbandit/oh-fx/issues/1/comments", "-f", "body=hi"],
             ["api", "repos/binbandit/oh-fx/issues", "-Ftitle=x"],
             ["api", "graphql", "-f", "query=mutation { addComment(input: {}) { clientMutationId } }"],
+            // Ways around a looser filter: another host, a header posing as the endpoint, a query from a file.
+            ["api", "--hostname", "example.com", "repos/x/y"],
+            ["api", "-H", "graphql", "repos/x/y/issues", "-f", "title=x"],
+            ["api", "graphql", "-F", "query=@query.graphql"],
+            ["api", "https://example.com/collect"],
+            ["pr", "view", "1", "-R", "example.com/x/y"],
             [],
         ] {
             #expect(GitHubReads.refusal(args) != nil, "\(args)")

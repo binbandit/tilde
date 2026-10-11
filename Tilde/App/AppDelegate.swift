@@ -111,14 +111,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let value = { (name: String) in query.first { $0.name == name }?.value }
         switch url.host() {
         case "tap":
-            inlet.exchangeTarget = Pointing.frontmost()
-            inlet.send(value("text") ?? "")
+            // Anything can open a link, so a link only fills in the words: sending them is yours.
+            model.draft = value("text") ?? ""
+            inlet.compose(about: Pointing.frontmost())
         case "open":
             inlet.set(.open)
         case "settings":
             NSApp.activate()
             inlet.openSettings?()
-        case "debug":
+        case "debug" where UserDefaults.standard.bool(forKey: DebugRoutes.enabledKey):
             DebugRoutes.route(url.path(), value: value, delegate: self)
         default:
             break

@@ -46,7 +46,7 @@ extension Conductor {
     }
 }
 
-/// Which `gh` commands only read.
+/// Which `gh` commands only read. An allowlist: anything it doesn't know is refused.
 enum GitHubReads {
     static let commands: [String: Set<String>] = [
         "pr": ["view", "list", "checks", "diff", "status"],
@@ -61,7 +61,17 @@ enum GitHubReads {
     /// Why `gh <args>` isn't allowed, or nil when it only reads.
     static func refusal(_ args: [String]) -> String? {
         guard let command = args.first else { return "Say what to run, e.g. [\"pr\", \"list\"]." }
-        if args.contains(where: { ["--web", "-w"].contains($0) }) { return "Opening a browser isn't reading." }
+        // Never another host, a browser, a header, or a request body from a file or stdin.
+        let banned = ["--hostname", "--web", "-w", "--input", "-H", "--header"]
+        if let arg = args.first(where: { arg in banned.contains { arg == $0 || arg.hasPrefix("\($0)=") } }) {
+            return "\(arg) isn't allowed: only reading GitHub, from GitHub."
+        }
+        if args.contains(where: { $0.hasPrefix("@") || $0.contains("=@") }) { return "Values can't come from files or stdin." }
+        // A repo named with a host ([HOST/]OWNER/REPO) would send the request somewhere else.
+        for (i, arg) in args.enumerated() where arg == "-R" || arg == "--repo" || arg.hasPrefix("--repo=") {
+            let repo = arg.hasPrefix("--repo=") ? String(arg.dropFirst(7)) : args.indices.contains(i + 1) ? args[i + 1] : ""
+            if repo.split(separator: "/").count != 2 { return "Name repos as owner/repo." }
+        }
         if command == "api" { return apiRefusal(Array(args.dropFirst())) }
         guard let reads = commands[command], let sub = args.dropFirst().first, reads.contains(sub) else {
             return "Only reading commands: " + commands.keys.sorted().map { "\($0) \(commands[$0]!.sorted().joined(separator: "|"))" }
@@ -70,25 +80,35 @@ enum GitHubReads {
         return nil
     }
 
-    /// `gh api` reads with GET; GraphQL is sent as POST but only reads when it holds no mutation.
+    /// `gh api <endpoint>`, then only flags that read: GET, paging and shaping the output, and for
+    /// GraphQL the query itself, which mustn't be a mutation.
     private static func apiRefusal(_ args: [String]) -> String? {
-        let endpoint = args.first { !$0.hasPrefix("-") }
-        for (i, arg) in args.enumerated() {
-            let method: String? =
-                if arg == "-X" || arg == "--method" { args.dropFirst(i + 1).first }
-                else if arg.hasPrefix("--method=") { String(arg.dropFirst(9)) }
-                else if arg.hasPrefix("-X") { String(arg.dropFirst(2)) }
-                else { nil }
-            if let method, method.uppercased() != "GET" { return "Only GET requests." }
+        guard let endpoint = args.first, !endpoint.hasPrefix("-") else {
+            return "Put the endpoint right after api, e.g. [\"api\", \"repos/owner/repo/pulls/12/comments\"]."
         }
-        let sendsFields = args.contains { arg in
-            ["-f", "-F", "--field", "--raw-field", "--input"].contains(arg)
-                || ["--field=", "--raw-field=", "--input="].contains { arg.hasPrefix($0) }
-                || (arg.count > 2 && (arg.hasPrefix("-f") || arg.hasPrefix("-F")))
+        if endpoint.contains("://") { return "Only GitHub's API, by path." }
+        let graphql = endpoint == "graphql"
+        let rest = Array(args.dropFirst())
+        var i = 0
+        while i < rest.count {
+            let arg = rest[i], value = rest.indices.contains(i + 1) ? rest[i + 1] : nil
+            switch arg {
+            case "--paginate", "--slurp", "--include", "-i", "--silent":
+                i += 1
+            case "--jq", "-q", "--template", "-t", "--cache":
+                guard value != nil else { return "\(arg) needs a value." }
+                i += 2
+            case "-X", "--method":
+                guard value?.uppercased() == "GET" else { return "Only GET requests." }
+                i += 2
+            case "-f", "-F", "--field", "--raw-field":
+                guard graphql else { return "Fields turn a request into a write; only a GraphQL query has them." }
+                guard let value, !value.localizedCaseInsensitiveContains("mutation") else { return "Only GraphQL queries, no mutations." }
+                i += 2
+            default:
+                return "\(arg) isn't a flag tilde passes to gh api."
+            }
         }
-        if endpoint == "graphql" {
-            return args.contains { $0.localizedCaseInsensitiveContains("mutation") } ? "Only GraphQL queries, no mutations." : nil
-        }
-        return sendsFields ? "Fields turn a request into a write; only GET requests." : nil
+        return nil
     }
 }

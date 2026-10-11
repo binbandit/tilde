@@ -64,17 +64,27 @@ public actor Dreamer {
 
     /// One editing pass over the notebook with `evidence` as the prompt.
     private func run(_ evidence: String, instructions: String, commit: String) async {
+        let rules = memory.notebook.read("rules.md")
         do {
             // It may read anywhere to learn a project; it writes only the notebook.
             let reply = try await model.run(ModelPass(
                 instructions: instructions, prompt: evidence, workdir: memory.notebook.path, writable: true))
+            keep(rules, after: commit)
             if reply.ok {
                 await memory.refresh()
                 await memory.notebook.commitChanges(context: commit)
             }
         } catch {
+            keep(rules, after: commit)
             Log.info("dream", "\(commit) failed: \(error)")
         }
+    }
+
+    /// Rules are permissions, and only the owner adds those: whatever a pass did to them is undone.
+    private func keep(_ rules: String?, after pass: String) {
+        guard let rules, memory.notebook.read("rules.md") != rules else { return }
+        try? rules.write(to: memory.notebook.url.appending(path: "rules.md"), atomically: true, encoding: .utf8)
+        Log.info("dream", "\(pass) changed rules.md; put it back")
     }
 
     static func meeting(owner: String) -> String {

@@ -6,6 +6,9 @@ import TildeKit
 /// for design work and screenshots without a live agent. Nothing here takes the keyboard.
 @MainActor
 enum DebugRoutes {
+    /// Off unless you turn them on (`just debug-routes`), so no other app or link can put words on screen as tilde.
+    static let enabledKey = "debugRoutes"
+
     static func route(_ path: String, value: (String) -> String?, delegate: AppDelegate) {
         let model = delegate.model
         let inlet = delegate.inlet

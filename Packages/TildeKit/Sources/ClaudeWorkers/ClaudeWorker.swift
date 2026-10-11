@@ -88,7 +88,9 @@ public actor ClaudeWorker: Worker, ClaudeHost {
         // Reaching another host is tilde's call, not a rail for the owner.
         let hosts = rail == nil ? ClaudeSandbox.newHosts(request.input) : nil
         if let hosts { action += "\n(needs the sandbox opened to \(hosts.joined(separator: ", ")))" }
-        switch await ask(.permission(tool: request.toolName, action: action, rail: hosts == nil ? rail ?? request.reason : nil)) {
+        // Claude's own reason is context for whoever decides, never a rail.
+        if let reason = request.reason, !reason.isEmpty { action += "\n(Claude Code says: \(reason))" }
+        switch await ask(.permission(tool: request.toolName, action: action, rail: hosts == nil ? rail : nil)) {
         case .allow: return .allow(request.input)
         case .deny(let reason): return .deny(reason)
         case .reply(let text): return .deny(text)

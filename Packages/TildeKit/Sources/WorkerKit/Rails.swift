@@ -1,16 +1,20 @@
 import Foundation
 import TildeSupport
 
-/// Hard rails: actions that always reach the manager as an explicit decision,
-/// however permissive the worker's own permission mode is. They mark anything
-/// that leaves the worktree or can't be undone; the manager then either finds
-/// a rule in rules.md that allows it or asks Brayden.
+/// Hard rails: actions that always reach a person as an explicit decision, however
+/// permissive the worker's own permission mode is. They mark anything that leaves the
+/// worktree or can't be undone. A rail is only ever one of tilde's own labels, never a
+/// worker's account of itself, and only the owner can allow it (the conductor enforces
+/// that: the manager can deny one, or ask, but not allow it).
 public enum Rails {
+    /// Running a command with the sandbox off.
+    public static let outsideSandbox = "Runs outside the sandbox, where it can change anything on this Mac"
+
     /// Returns why `tool` with `input` crosses a rail, or nil if it doesn't.
     public static func check(tool: String, input: JSON, workdir: String) -> String? {
         switch tool {
         case "Bash":
-            if input["dangerouslyDisableSandbox"]?.bool == true { return "Runs outside the sandbox, where it can change anything on this Mac" }
+            if input["dangerouslyDisableSandbox"]?.bool == true { return outsideSandbox }
             return input["command"]?.string.flatMap { command(in: $0, workdir: workdir) }
         case "Write", "Edit", "MultiEdit", "NotebookEdit":
             guard let path = input["file_path"]?.string ?? input["notebook_path"]?.string else { return nil }

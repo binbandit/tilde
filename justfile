@@ -24,7 +24,11 @@ test:
 smoke repo utterance *flags:
     cd Packages/TildeKit && swift build --product tilde-smoke && TILDE_HOME=${TILDE_HOME:-/tmp/tilde-smoke} .build/debug/tilde-smoke {{repo}} "{{utterance}}" {{flags}}
 
-# Show the Inlet with fixture data, without taking the keyboard:
+# Let `just show` drive the running app (debug routes are off unless this is set)
+debug-routes on="true":
+    defaults write dev.tilde.app debugRoutes -bool {{on}}
+
+# Show the Inlet with fixture data, without taking the keyboard (after `just debug-routes`):
 # just show fixtures|empty|clear|hide|frame, inlet "?mode=rest|open|compose|peek", listen "?text=...", job "?id=j-r4k2", place "?edge=top&notch=1"
 show surface *query:
     open "tilde://debug/{{surface}}{{query}}"

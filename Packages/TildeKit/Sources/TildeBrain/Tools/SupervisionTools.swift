@@ -39,7 +39,12 @@ extension Conductor {
         guard let id = args["request"]?.string, let decision = args["decision"]?.string else {
             return .error("request and decision are required.")
         }
-        guard requests[id] != nil else { return .error("Request \(id) is no longer open.") }
+        guard let pending = requests[id] else { return .error("Request \(id) is no longer open.") }
+        if decision == "allow", let rail = unallowedRail(pending.request, job: pending.job) {
+            return .error(
+                "That crosses a rail (\(rail)), so it's \(Owner.firstName)'s to allow, not yours. Deny it, or `ask` them, "
+                    + "passing request \"\(id)\", with what you'd pick and why.")
+        }
         let text = args["text"]?.string ?? ""
         let answer: WorkerAnswer =
             switch decision {
