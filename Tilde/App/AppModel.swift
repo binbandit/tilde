@@ -52,9 +52,10 @@ final class AppModel {
     var jobs: [Job] { fixture?.jobs ?? conductor?.jobs ?? [] }
     var attention: [Attention] { fixture?.attention ?? conductor?.attention ?? [] }
 
-    /// The jobs to keep in view: open ones, and failed ones whose work is still there to look at or clear.
+    /// The jobs to keep in view: open ones, and failed ones with a worktree or scratch folder still to look at
+    /// or discard (work done in place has nothing of its own to clear).
     var crew: [Job] {
-        jobs.filter { $0.phase.isOpen || ($0.phase == .failed && FileManager.default.fileExists(atPath: $0.workdir)) }
+        jobs.filter { $0.phase.isOpen || ($0.phase == .failed && $0.isolation != .inPlace) }
             .sorted { $0.createdAt < $1.createdAt }
     }
 

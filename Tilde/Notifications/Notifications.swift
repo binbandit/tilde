@@ -27,8 +27,8 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         case .asked(let item): if Self.isAway { post(item) } else { remindLater(item) }
         case .resolved(let id): center.removeDeliveredNotifications(withIdentifiers: [id])
         case .said(let text, let jobID): if Self.isAway { say(text, jobID: jobID) }
-        // A reply you walked away from waits for you like a text would.
-        case .replied(let text): if Self.isAway { say(text, jobID: nil) }
+        // A reply you walked away from waits for you like a text would (not one showing on the Inlet now).
+        case .replied(let text): if Self.isAway, inlet.inlet.mode == .rest { say(text, jobID: nil) }
         case .noted, .jobChanged, .trouble: break
         }
     }
@@ -38,7 +38,10 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     private func remindLater(_ item: Attention) {
         Task {
             try? await Task.sleep(for: .seconds(300))
-            guard model.attention.contains(where: { $0.id == item.id }) else { return }
+            // Not if it's answered, or in front of you right now (the conversation, or its job, open).
+            guard model.attention.contains(where: { $0.id == item.id }), !inlet.inlet.isConversation,
+                inlet.inlet.mode != .job(item.jobID ?? "")
+            else { return }
             post(item)
         }
     }

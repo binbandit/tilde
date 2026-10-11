@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         trigger.start()
         listener.onUpdate = { [weak self] transcript, level in
             self?.model.listening = AppModel.Listening(transcript: transcript, level: level)
+            self?.loudest = max(self?.loudest ?? 0, level)
         }
         inlet.show()
 
@@ -72,8 +73,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// When the current hold began, and the loudest the microphone heard during it: together, whether you
+    /// actually tried to say something.
+    private var holdBegan = Date.distantPast
+    private var loudest = 0.0
+
     private func beginListening(at point: CGPoint) {
         tapPoint = point
+        holdBegan = .now
+        loudest = 0
         let referent = Pointing.referent(at: point) ?? Pointing.frontmost()
         if let referent { lens.show(on: referent) }
         model.listening = AppModel.Listening()
@@ -103,7 +111,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lensTracking = nil
         let heard = await listener.finish()
         model.listening = nil
-        inlet.heard(send ? heard : "", cancelled: !send)
+        // Silence from a short or quiet hold (a modifier held for something else) isn't you trying to talk.
+        let tried = Date.now.timeIntervalSince(holdBegan) > 1 && loudest > 0.2
+        inlet.heard(send ? heard : "", cancelled: !send || !tried)
     }
 
     // MARK: tilde:// routes

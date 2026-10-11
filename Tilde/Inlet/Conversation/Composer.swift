@@ -13,7 +13,14 @@ struct Composer: View {
     /// You've chosen to say something new rather than answer the open question.
     @State private var newMessage = false
 
-    private var answering: Attention? { newMessage ? nil : model.openQuestion }
+    /// The question your words answer: the open one, or (once you've started typing) the one you started
+    /// answering, even if tilde has said something since.
+    private var answering: Attention? {
+        if newMessage { return nil }
+        if let latched, let item = model.attention.first(where: { $0.id == latched }) { return item }
+        return model.openQuestion
+    }
+    @State private var latched: String?
     private var typed: Bool { !model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
@@ -69,7 +76,16 @@ struct Composer: View {
             }
             .frame(minHeight: 26)
             .animation(Theme.quick, value: typed)
-            if let referent { PointingChip(label: referent.label) }
+            if let referent {
+                HStack(spacing: 6) {
+                    PointingChip(label: referent.label)
+                    Button { actions.unpoint() } label: {
+                        Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.text3)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Leave this out")
+                }
+            }
         }
         .padding(.leading, 13)
         .padding(.trailing, 8)
@@ -86,7 +102,8 @@ struct Composer: View {
         .onDisappear { model.missedYou = false }
         .onChange(of: model.draft) { if !model.draft.isEmpty { model.missedYou = false } }
         .onChange(of: focused) { _, now in if now { hasFocus = true } }
-        .onChange(of: model.openQuestion?.id) { newMessage = false }
+        .onChange(of: model.openQuestion?.id) { if latched == nil { newMessage = false } }
+        .onChange(of: model.draft) { latched = model.draft.isEmpty ? nil : latched ?? (newMessage ? nil : model.openQuestion?.id) }
     }
 
     private func submit() {

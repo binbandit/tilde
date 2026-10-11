@@ -39,6 +39,7 @@ struct QuestionOptions: View {
                     ForEach(Array(item.options.enumerated()), id: \.offset) { index, option in
                         Button(option) { answer(option) }
                             .buttonStyle(OptionStyle(picked: index == item.recommended, stacked: true))
+                            .keyboardShortcut(acceptsReturn && index == item.recommended ? KeyboardShortcut(.return, modifiers: .command) : nil)
                     }
                 }
             }

@@ -54,7 +54,10 @@ struct ConversationView: View {
                         MessageRow(message: message, chips: [], actions: actions, tail: !joins(index + 1, in: model.earlier))
                             .padding(.top, gap != nil || index == 0 ? 0 : joins(index, in: model.earlier) ? 3 : 12)
                     }
-                    Separator(text: model.thread.first.map { "Today \($0.at.formatted(date: .omitted, time: .shortened))" } ?? "Today", first: false)
+                    // A question carried over from an earlier day labels itself; "Today" heads the first of today's.
+                    if !(model.thread.first.map { !Calendar.current.isDateInToday($0.at) } ?? false) {
+                        Separator(text: model.thread.first.map { "Today \($0.at.formatted(date: .omitted, time: .shortened))" } ?? "Today", first: false)
+                    }
                 }
                 // If tilde couldn't start, it says so where you'd talk to it.
                 if let error = model.startupError {
@@ -68,7 +71,12 @@ struct ConversationView: View {
                 let receipts = receipts
                 ForEach(Array(model.thread.enumerated()), id: \.element.id) { index, message in
                     // With the last conversation above, "Today" has already said when this one started.
-                    let gap = index == 0 && !model.earlier.isEmpty ? nil : Self.gap(before: index, in: model.thread)
+                    let headed = index == 0 && !model.earlier.isEmpty && Calendar.current.isDateInToday(message.at)
+                    let gap = headed ? nil : Self.gap(before: index, in: model.thread).map { label in
+                        // The first of today's after a carried-over question still says it's today.
+                        index > 0 && !model.earlier.isEmpty && Calendar.current.isDateInToday(message.at)
+                            && !Calendar.current.isDateInToday(model.thread[index - 1].at) ? "Today \(label)" : label
+                    }
                     if let gap { Separator(text: gap, first: index == 0) }
                     MessageRow(
                         message: message, chips: chips[message.id] ?? [], actions: actions,

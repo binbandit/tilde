@@ -131,6 +131,8 @@ struct InletActions {
     /// Make the composer usable (the panel takes the keyboard).
     var compose: () -> Void
     var dismiss: () -> Void
+    /// Leave out what you were pointing at.
+    var unpoint: () -> Void = {}
 }
 
 /// Leaving, content is drawn into the point it collapses to: it shrinks toward it, softens

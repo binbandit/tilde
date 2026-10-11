@@ -39,6 +39,8 @@ final class InletController {
     @ObservationIgnored private var backToConversation = false
     /// Where the pointer was when the current peek came out: one already resting there didn't come for it.
     @ObservationIgnored private var pointerAtPeek: CGPoint?
+    /// What you said that the peeked reply answers, to show instead if the reply never comes.
+    @ObservationIgnored private var peekedFor: String?
 
     init(model: AppModel, lens: LensController) {
         self.model = model
@@ -53,11 +55,16 @@ final class InletController {
             openJob: { [weak self] in self?.openJob($0) },
             compose: { [weak self] in
                 guard let self, self.inlet.mode != .compose else { return }
-                // Typing after opening it by hover: what you were working in comes along, as with a double-tap.
-                if self.exchangeTarget == nil { self.exchangeTarget = Pointing.frontmost() }
+                // Typing after opening it by hover: which app and window you were in comes along (never what's
+                // selected there, which you didn't point at), shown on a chip you can take off.
+                if self.exchangeTarget == nil {
+                    self.exchangeTarget = Pointing.frontmost()
+                    self.exchangeTarget?.selection = nil
+                }
                 self.set(.compose)
             },
-            dismiss: { [weak self] in self?.dismiss() })
+            dismiss: { [weak self] in self?.dismiss() },
+            unpoint: { [weak self] in self?.exchangeTarget = nil })
     }
 
     // MARK: Showing
@@ -200,12 +207,20 @@ final class InletController {
 
         if let latest = fresh.last, inlet.mode == .rest || isPeek {
             set(.peek(latest.id))
+            peekedFor = thread.firstIndex { $0.id == latest.id }.flatMap { i in i > 0 && thread[i - 1].from == .you ? thread[i - 1].id : nil }
         }
         guard case .peek(var id) = inlet.mode else { return }
-        // The reply it was showing is gone (what you said never got through): show that instead, with Try again.
+        // The reply it was showing is gone. If what it answered never got through, that shows instead, with Try
+        // again; if another reply took its place, that one; otherwise there's nothing to show.
         if !thread.contains(where: { $0.id == id }) {
-            guard let failed = thread.last(where: { if case .failed = $0.delivery { true } else { false } }) else { return set(.rest) }
-            id = failed.id
+            let said = peekedFor.flatMap { said in thread.first { $0.id == said } }
+            if let said, case .failed = said.delivery {
+                id = said.id
+            } else if let writing = thread.last(where: { $0.from == .tilde && $0.streaming }) {
+                id = writing.id
+            } else {
+                return set(.rest)
+            }
             set(.peek(id))
         }
         if let message = thread.first(where: { $0.id == id }), !message.streaming { settle(id, after: linger(for: message)) }
@@ -225,10 +240,12 @@ final class InletController {
         settleTask?.cancel()
         settleTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
-            guard !Task.isCancelled, let self, case .peek(let showing) = self.inlet.mode, showing == id,
-                !self.inletRect.insetBy(dx: -16, dy: -16).contains(NSEvent.mouseLocation)
-            else { return }
-            self.set(.rest)
+            // While you're on it, it waits for you to move off (a question's peek, say, doesn't open under you).
+            while !Task.isCancelled {
+                guard let self, case .peek(let showing) = self.inlet.mode, showing == id else { return }
+                if !self.inletRect.insetBy(dx: -16, dy: -16).contains(NSEvent.mouseLocation) { return self.set(.rest) }
+                try? await Task.sleep(for: .seconds(1))
+            }
         }
     }
 

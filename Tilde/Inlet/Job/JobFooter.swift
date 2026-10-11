@@ -150,6 +150,13 @@ private struct AgentComposer: View {
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Theme.text2)
+                    // Stop stays in reach while you answer, named, so it can't be mistaken for sending.
+                    if job.phase.isActive {
+                        Button("Stop", action: stop)
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Theme.failed)
+                    }
                 }
                 .padding(.top, 3)
                 .padding(.trailing, 5)
