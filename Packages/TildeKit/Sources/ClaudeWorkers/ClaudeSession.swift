@@ -32,7 +32,9 @@ public actor ClaudeSession {
     private var pendingControl: [String: CheckedContinuation<JSON, Never>] = [:]
     private var inFlight: [String: Task<Void, Never>] = [:]
     /// The messages tilde sent, by uuid. Claude runs each as a command; it can also run
-    /// commands of its own (a plugin's at startup, say) that report their own `result`.
+    /// commands of its own (a plugin's at startup, say) that report their own `result`, and a
+    /// plugin can answer one of tilde's messages locally before the model's turn (both marked
+    /// `local_command`), so neither ends a turn.
     private var sent: Set<String> = []
     /// The command Claude says it's running (`command_lifecycle`), if it says.
     private var running: String?
@@ -161,7 +163,7 @@ public actor ClaudeSession {
                 emit.yield(.textDelta(text))
             }
         case "assistant":
-            guard isOurs, message["parent_tool_use_id"]?.isNull ?? true else { return }
+            guard isOurs, message["parent_tool_use_id"]?.isNull ?? true, message["local_command_run"]?.isNull ?? true else { return }
             for block in message["message"]?["content"]?.array ?? [] {
                 switch block["type"]?.string {
                 case "text":
@@ -180,7 +182,7 @@ public actor ClaudeSession {
                     output: Self.flatten(block["content"])))
             }
         case "result":
-            guard isOurs else { return }
+            guard isOurs, message["local_command"]?.isNull ?? true else { return }
             emit.yield(.turnDone(ClaudeTurn(
                 ok: message["subtype"]?.string == "success" && !(message["is_error"]?.bool ?? false),
                 text: message["result"]?.string ?? message["errors"]?.array?.compactMap(\.string).joined(separator: "\n") ?? "",
