@@ -28,6 +28,8 @@ public final class Conductor {
 
     /// Today's conversation with tilde, oldest first.
     public internal(set) var thread: [Message] = []
+    /// The last few messages of the previous conversation, shown above today's.
+    public internal(set) var earlier: [Message] = []
     public internal(set) var jobs: [Job] = []
     public internal(set) var attention: [Attention] = []
     public internal(set) var trouble: String?
@@ -103,6 +105,7 @@ public final class Conductor {
         try await memory.prepare()
         restore()
         thread = threads.load()
+        earlier = threads.earlier(than: .now, last: Self.earlierShown)
         reconcileQuestions()
         // The day's manager thread is kept open, so nobody waits for it to start, even on a new day.
         Task { [manager] in
@@ -160,6 +163,9 @@ public final class Conductor {
     }
 
     /// Makes text safe inside a double-quoted attribute of the manager's tags.
+    /// How much of the previous conversation stays in view above today's.
+    static let earlierShown = 6
+
     nonisolated static func escape(_ text: String) -> String {
         text.replacingOccurrences(of: "\"", with: "'").replacingOccurrences(of: "\n", with: " ")
     }

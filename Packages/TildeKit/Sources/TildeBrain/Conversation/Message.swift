@@ -42,6 +42,15 @@ public struct Message: Identifiable, Codable, Sendable, Hashable {
     /// For what you said to tilde: whether it has it yet.
     public var delivery: Delivery?
 
+    /// As it reads once its day is over: nothing open, nothing being written.
+    public var asHistory: Message {
+        var message = self
+        message.attentionID = nil
+        message.streaming = false
+        message.activity = nil
+        return message
+    }
+
     public init(
         id: String? = nil, from: From, text: String, at: Date = .now, pointing: String? = nil, jobs: [String] = [],
         attentionID: String? = nil, streaming: Bool = false, noted: [String] = [], trouble: Bool = false, settled: String? = nil

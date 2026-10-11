@@ -28,6 +28,7 @@ final class AppModel {
 
     struct Fixture {
         var thread: [Message] = []
+        var earlier: [Message] = []
         var jobs: [Job] = []
         var attention: [Attention] = []
         var transcripts: [String: [JobEntry]] = [:]
@@ -45,6 +46,7 @@ final class AppModel {
     }
 
     var thread: [Message] { fixture?.thread ?? conductor?.thread ?? [] }
+    var earlier: [Message] { fixture?.earlier ?? conductor?.earlier ?? [] }
     var jobs: [Job] { fixture?.jobs ?? conductor?.jobs ?? [] }
     var attention: [Attention] { fixture?.attention ?? conductor?.attention ?? [] }
 

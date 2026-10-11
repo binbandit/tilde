@@ -53,7 +53,18 @@ enum Fixtures {
                 jobs: ["j-r4k2"], noted: ["Wants pricing copy short and plain."]),
             Message(from: .tilde, text: offer.question, at: ago(1), attentionID: offer.id),
         ]
-        return AppModel.Fixture(thread: thread, jobs: jobs, attention: [ask, offer], transcripts: transcripts(ago), diff: sampleDiff)
+        let yesterday = { (hour: Int, minute: Int) in
+            Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: .now.addingTimeInterval(-86_400)) ?? .now
+        }
+        let earlier = [
+            Message(from: .you, text: "anything left for tonight?", at: yesterday(21, 40)),
+            Message(
+                from: .tilde, text: "Just the pricing copy: Claude Code is rewriting the tiers, and I'll have it ready by the morning.",
+                at: yesterday(21, 40)),
+            Message(from: .you, text: "great, night", at: yesterday(21, 41)),
+        ]
+        return AppModel.Fixture(
+            thread: thread, earlier: earlier, jobs: jobs, attention: [ask, offer], transcripts: transcripts(ago), diff: sampleDiff)
     }
 
     /// What each agent was told, said, did and asked.

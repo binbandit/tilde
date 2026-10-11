@@ -196,6 +196,7 @@ extension Conductor {
     /// Adds a message, starting a new thread when the day has turned.
     func append(_ message: Message) {
         if !Calendar.current.isDateInToday(threadDay) {
+            earlier = Array(thread.filter { !$0.text.isEmpty }.suffix(Self.earlierShown)).map(\.asHistory)
             thread = []
             threadDay = .now
             reconcileQuestions()

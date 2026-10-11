@@ -36,24 +36,30 @@ struct ConversationView: View {
     private var thread: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                // The end of the last conversation, a scroll away, so the day picks up where it left off.
+                if !model.earlier.isEmpty {
+                    ForEach(Array(model.earlier.enumerated()), id: \.element.id) { index, message in
+                        let gap = Self.gap(before: index, in: model.earlier)
+                        if let gap { Separator(text: gap, first: index == 0) }
+                        MessageRow(message: message, chips: [], actions: actions, tail: !joins(index + 1, in: model.earlier))
+                            .padding(.top, gap != nil || index == 0 ? 0 : joins(index, in: model.earlier) ? 3 : 12)
+                    }
+                    Separator(text: model.thread.first.map { "Today \($0.at.formatted(date: .omitted, time: .shortened))" } ?? "Today", first: false)
+                }
                 if model.thread.isEmpty, model.listening == nil {
                     Greeting(actions: actions)
                 }
                 let chips = chips
                 let receipts = receipts
                 ForEach(Array(model.thread.enumerated()), id: \.element.id) { index, message in
-                    let gap = Self.gap(before: index, in: model.thread)
-                    if let gap {
-                        Text(gap).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.text3)
-                            .frame(maxWidth: .infinity)
-                            .padding(.top, index == 0 ? 0 : 18)
-                            .padding(.bottom, 10)
-                    }
+                    // With the last conversation above, "Today" has already said when this one started.
+                    let gap = index == 0 && !model.earlier.isEmpty ? nil : Self.gap(before: index, in: model.thread)
+                    if let gap { Separator(text: gap, first: index == 0) }
                     MessageRow(
                         message: message, chips: chips[message.id] ?? [], actions: actions,
-                        tail: !joins(index + 1, chips: chips, receipts: receipts), receipt: receipts.contains(index))
+                        tail: !joins(index + 1, in: model.thread, chips: chips, receipts: receipts), receipt: receipts.contains(index))
                         // A run from one side sits close together; a new speaker gets room.
-                        .padding(.top, gap != nil || index == 0 ? 0 : joins(index, chips: chips, receipts: receipts) ? 3 : 12)
+                        .padding(.top, gap != nil || index == 0 ? 0 : joins(index, in: model.thread, chips: chips, receipts: receipts) ? 3 : 12)
                 }
                 if let listening = model.listening {
                     ListeningRow(listening: listening, referent: referent).padding(.top, model.thread.isEmpty ? 0 : 12)
@@ -100,8 +106,7 @@ struct ConversationView: View {
 
     /// Whether the message at `index` carries on a run from the one before: same side, no time
     /// between them, and nothing hanging off the earlier one.
-    private func joins(_ index: Int, chips: [String: [String]], receipts: Set<Int>) -> Bool {
-        let thread = model.thread
+    private func joins(_ index: Int, in thread: [Message], chips: [String: [String]] = [:], receipts: Set<Int> = []) -> Bool {
         guard index > 0, index < thread.count, Self.gap(before: index, in: thread) == nil else { return false }
         let previous = thread[index - 1], message = thread[index]
         guard previous.from == message.from, !(message.streaming && message.text.isEmpty) else { return false }
@@ -121,13 +126,28 @@ struct ConversationView: View {
         return .idle
     }
 
-    /// A time between messages more than half an hour apart, with the day for questions
-    /// still waiting from an earlier one.
+    /// A time between messages more than half an hour apart, with the day for anything
+    /// from before today ("Yesterday 6:11 PM").
     static func gap(before index: Int, in thread: [Message]) -> String? {
         let at = thread[index].at
         guard index == 0 || at.timeIntervalSince(thread[index - 1].at) > 30 * 60 else { return nil }
-        return Calendar.current.isDateInToday(at)
-            ? at.formatted(date: .omitted, time: .shortened) : at.formatted(.dateTime.weekday(.wide).hour().minute())
+        let time = at.formatted(date: .omitted, time: .shortened)
+        if Calendar.current.isDateInToday(at) { return time }
+        if Calendar.current.isDateInYesterday(at) { return "Yesterday \(time)" }
+        return at.formatted(.dateTime.weekday(.wide).hour().minute())
+    }
+}
+
+/// When the conversation picks up again: centred, small, out of the way.
+private struct Separator: View {
+    var text: String
+    var first: Bool
+
+    var body: some View {
+        Text(text).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.text3)
+            .frame(maxWidth: .infinity)
+            .padding(.top, first ? 0 : 18)
+            .padding(.bottom, 10)
     }
 }
 
