@@ -28,12 +28,17 @@ enum ReadOnlyTools {
         "send", "set", "share", "submit", "unarchive", "unassign", "uninstall", "unshare", "update", "upload", "upsert", "write",
     ]
 
-    /// Whether a connector tool reads like a read: it starts with a reading verb and says nothing about changing anything.
-    /// Account connectors namespace their tools (`gmail.search_emails`); the verb follows the last dot.
+    /// What a "read" can't be about: a tool that fetches any URL, runs any query or makes any request can
+    /// write, or carry what the review has read (mail, the calendar, the notebook) somewhere else.
+    private static let anything: Set<String> = ["url", "urls", "sql", "http", "https", "request", "requests", "web", "webpage", "raw", "graphql"]
+
+    /// Whether a connector tool reads like a read: it starts with a reading verb, names what it reads (not just
+    /// anything: a URL, SQL, the web), and says nothing about changing anything. Account connectors namespace
+    /// their tools (`gmail.search_emails`); the verb follows the last dot.
     static func allows(_ tool: String) -> Bool {
         let words = words(of: tool.split(separator: ".").last.map(String.init) ?? "")
-        guard let verb = words.first, reads.contains(verb) else { return false }
-        return !words.contains(where: changes.contains)
+        guard let verb = words.first, reads.contains(verb), words.count > 1 else { return false }
+        return !words.contains(where: changes.contains) && !words.contains(where: anything.contains)
     }
 
     /// `list_issues`, `getIssue`, `search-docs`, "List issues": lowercased words.

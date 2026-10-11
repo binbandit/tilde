@@ -99,6 +99,9 @@ Motion is spring-based: the shape morphs, it doesn't fade between screens. Text 
 ## Trust
 
 - Every job gets its own git worktree; nothing touches your checkout until you bring it in.
-- Rails: pushes, PRs, deploys, deletes outside the worktree, cloud and cluster commands, and sensitive apps under computer use always surface as explicit decisions, to you unless `rules.md` allows them.
+- Rails: pushes (git or Kite), PRs and other GitHub writes, deploys, running outside the sandbox, deletes or writes outside the worktree, cloud and cluster commands, and sensitive apps under computer use always come to you. The manager can deny one or ask you about it; only you allow one, and the code holds it to that. "Always" on a rail allows exactly that rail in that project from then on, kept where no model can write.
+- Workers can commit in their worktree but never change what makes git run code (the repo's config and hooks): Claude's sandbox can't write them, and anything a turn changes there is put back, with a word to you.
+- `rules.md` is yours: memory never adds to it, and a dream that edits it is undone.
+- What tilde records of your day keeps window titles only for work (terminals, editors, git clients, development pages in a browser); elsewhere, only the app's name.
 - Every decision the manager makes is logged with its reason in `tasks/<job>.md`.
 - Everything tilde knows is markdown in a git repo you own.

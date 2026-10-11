@@ -52,7 +52,7 @@ import TildeWork
 
     @Test func onlyToolsThatReadLikeReadsAreAllowed() {
         for tool in [
-            "list_issues", "get_issue", "search_documentation", "fetch", "read_file", "query_database", "view_page", "getIssue",
+            "list_issues", "get_issue", "search_documentation", "read_file", "query_database", "view_page", "getIssue",
             "List issues", "get-diff", "get_commit", "list_comments", "get_workflow_run", "get_app_state", "gmail.search_emails",
             "google_calendar.list_events",
         ] {
@@ -62,6 +62,8 @@ import TildeWork
             "save_issue", "create_comment", "delete_event", "update_project", "send_message", "merge_diff", "mark_notification",
             "get_or_create_label", "list_and_archive", "fetchAndUpdate", "click", "js", "extract_images", "mcp__linear__list_issues", "",
             "gmail.send_email", "get.delete_event", "sites.create_site",
+            // A read of anything at all can write, or send what was read elsewhere.
+            "fetch", "fetch_url", "query_sql", "search_web", "get_request",
         ] {
             #expect(!ReadOnlyTools.allows(tool), "\(tool)")
         }
