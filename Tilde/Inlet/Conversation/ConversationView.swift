@@ -37,7 +37,7 @@ struct ConversationView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if model.thread.isEmpty, model.listening == nil {
-                    Greeting()
+                    Greeting(actions: actions)
                 }
                 let chips = chips
                 let receipts = receipts
@@ -131,18 +131,34 @@ struct ConversationView: View {
     }
 }
 
-/// What tilde says when there's nothing yet today.
+/// What tilde says when there's nothing yet today, with a few things to ask it, one click away.
 private struct Greeting: View {
     @AppStorage("trigger") private var trigger = Trigger.doubleOption.rawValue
+    var actions: InletActions
+
+    private let suggestions = ["What's waiting on me?", "How are my PRs?", "What did I get done yesterday?"]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Hi \(Owner.firstName). What can I take off your plate?")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Theme.text)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 0) {
+                Text("Hi \(Owner.firstName). What can I take off your plate?")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Theme.text)
+                    .padding(.horizontal, 13)
+                    .padding(.vertical, 8)
+                    .background(Theme.bubble, in: BubbleShape(mine: false, tail: true))
+                Spacer(minLength: 40)
+            }
             Text("Point at something and \((Trigger(rawValue: trigger) ?? .doubleOption).hint).")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.text2)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.text3)
+                .padding(.leading, 6)
+            FlowLayout {
+                ForEach(suggestions, id: \.self) { suggestion in
+                    Button(suggestion) { actions.send(suggestion) }.buttonStyle(.outline)
+                }
+            }
+            .padding(.top, 2)
         }
     }
 }

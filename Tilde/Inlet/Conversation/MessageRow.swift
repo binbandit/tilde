@@ -61,14 +61,12 @@ struct TildeWords: View {
     var chips: [String]
     var actions: InletActions
     var tail = true
-    /// In the conversation tilde speaks in bubbles; peeking out of the edge, it speaks plainly.
-    var bubbled = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if message.streaming, message.text.isEmpty {
                 writing
-            } else if bubbled {
+            } else {
                 HStack(spacing: 0) {
                     words
                         .padding(.horizontal, 13)
@@ -77,8 +75,6 @@ struct TildeWords: View {
                         .help(message.at.formatted(date: .omitted, time: .shortened))
                     Spacer(minLength: 40)
                 }
-            } else {
-                words
             }
             if let id = message.attentionID, let item = model.attention.first(where: { $0.id == id }) {
                 QuestionOptions(item: item)
@@ -89,7 +85,7 @@ struct TildeWords: View {
                     Text("No longer needed: \(settled)").font(.system(size: 12)).lineLimit(2)
                 }
                 .foregroundStyle(Theme.text3)
-                .padding(.leading, bubbled ? 6 : 0)
+                .padding(.leading, 6)
                 .transition(.opacity)
             }
             ForEach(chips, id: \.self) { jobID in
@@ -100,7 +96,7 @@ struct TildeWords: View {
                     Text("Noted").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.amber)
                     Text(fact).font(.system(size: 12)).foregroundStyle(Theme.text2).lineLimit(2)
                 }
-                .padding(.leading, bubbled ? 6 : 0)
+                .padding(.leading, 6)
                 .transition(.opacity)
             }
         }
@@ -116,22 +112,13 @@ struct TildeWords: View {
 
     /// Nothing said yet: the dots, and what tilde is doing meanwhile.
     @ViewBuilder private var writing: some View {
-        if bubbled {
-            TypingBubble()
-            if let activity = message.activity {
-                Text("\(activity)…")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(Theme.text3)
-                    .shimmering()
-                    .padding(.leading, 6)
-                    .contentTransition(.opacity)
-                    .animation(Theme.quick, value: message.activity)
-            }
-        } else {
-            Text(message.activity.map { "\($0)…" } ?? "On it…")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(Theme.text2)
+        TypingBubble()
+        if let activity = message.activity {
+            Text("\(activity)…")
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundStyle(Theme.text3)
                 .shimmering()
+                .padding(.leading, 6)
                 .contentTransition(.opacity)
                 .animation(Theme.quick, value: message.activity)
         }
