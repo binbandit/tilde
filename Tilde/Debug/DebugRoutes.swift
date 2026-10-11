@@ -24,7 +24,7 @@ enum DebugRoutes {
             delegate.lens.hide()
         case "/inlet":
             // &real=1 shows what's really there. &said=sent|read|failed adds something you just said, in that
-            // state; &doing=<activity> has tilde writing back to it.
+            // state; &say=<words> has tilde say something; &doing=<activity> has tilde writing back.
             if value("real") != "1" { fixtures() }
             if let state = value("said") ?? value("doing").map({ _ in "read" }), model.fixture != nil {
                 var said = Message(from: .you, text: "how many PRs do I have open in oh-fx?")
@@ -34,6 +34,9 @@ enum DebugRoutes {
                 default: .read(.now)
                 }
                 model.fixture?.thread.append(said)
+            }
+            if let words = value("say"), model.fixture != nil {
+                model.fixture?.thread.append(Message(from: .tilde, text: words))
             }
             if let doing = value("doing"), model.fixture != nil {
                 var pending = Message(from: .tilde, text: "", streaming: true)

@@ -19,7 +19,15 @@ struct PeekView: View {
                 }
                 HStack(alignment: .top, spacing: 8) {
                     TildeMark(mood: mood(message), size: 18).padding(.top, 12)
+                    // A long reply shows its start; resting the pointer on it opens the whole conversation.
+                    let long = message.text.count > 600 || message.text.split(separator: "\n").count > 12
                     TildeWords(message: message, chips: message.jobs, actions: actions)
+                        .frame(maxHeight: long ? 280 : nil, alignment: .top)
+                        .mask {
+                            LinearGradient(
+                                stops: [.init(color: .black, location: 0.75), .init(color: .black.opacity(long ? 0 : 1), location: 1)],
+                                startPoint: .top, endPoint: .bottom)
+                        }
                 }
             }
         }
