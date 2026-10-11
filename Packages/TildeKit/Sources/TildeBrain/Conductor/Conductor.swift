@@ -69,6 +69,8 @@ public final class Conductor {
     @ObservationIgnored var answerTaps: Set<String> = []
     /// Each worktree job's repo git config and hooks as they were when its worker started.
     @ObservationIgnored var gitGuards: [String: GitGuard] = [:]
+    /// What the watchers last saw of your PRs, kept here so a message can take it along without waiting.
+    @ObservationIgnored var watching = ""
 
     public struct Config: Sendable {
         public var manager = Manager.Config()
@@ -164,6 +166,12 @@ public final class Conductor {
     func emit(_ s: Signal) {
         if case .said(let text, let jobID) = s { append(Message(from: .tilde, text: text, jobs: jobID.map { [$0] } ?? [])) }
         signal.yield(s)
+    }
+
+    /// Text from outside tilde (an agent, a PR comment, a CI log) as plain words: it can't open or close
+    /// one of the manager's tags and pass itself off as tilde or the owner.
+    nonisolated static func untrusted(_ text: String) -> String {
+        text.replacingOccurrences(of: "<", with: "‹").replacingOccurrences(of: ">", with: "›")
     }
 
     /// Makes text safe inside a double-quoted attribute of the manager's tags.

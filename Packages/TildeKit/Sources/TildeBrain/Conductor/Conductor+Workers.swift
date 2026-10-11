@@ -67,6 +67,8 @@ extension Conductor {
             Task {
                 var diff: DiffStat?
                 if let base = job.baseCommit { diff = await Git.diffStat(workdir: job.workdir, base: base) }
+                // Stopped (or taken over) while that was being worked out: it stays that way.
+                guard self.job(jobID)?.phase.isActive == true else { return }
                 record(jobID, .agent, .turnEnded, diff?.label ?? "")
                 update(jobID) {
                     $0.diff = diff
@@ -76,7 +78,7 @@ extension Conductor {
                 await refreshPullRequest(jobID)
                 await manager.post(.init("""
                     <worker-finished job="\(jobID)" ok="\(ok)" workdir="\(job.workdir)" changes="\(diff?.label ?? "unknown")">
-                    \(text.clipped(to: 6_000, keepLines: true))
+                    \(Self.untrusted(text.clipped(to: 6_000, keepLines: true)))
                     </worker-finished>
                     """, jobs: [jobID]))
             }
@@ -89,6 +91,8 @@ extension Conductor {
             }
             record(jobID, .agent, .event, detail ?? "Exited")
             for (id, pending) in requests where pending.job == jobID { requests.removeValue(forKey: id) }
+            // Its questions went with it: nothing you type now should answer a request no one is waiting on.
+            for item in attention where item.jobID == jobID && item.requestID != nil { withdraw(item.id, because: "the agent stopped") }
             Task {
                 await manager.post(.init(
                     "<worker-stopped job=\"\(jobID)\">\(detail ?? "The worker exited.")</worker-stopped>", jobs: [jobID]))
@@ -117,13 +121,13 @@ extension Conductor {
         case .permission(let tool, let action, let rail):
             return """
                 <worker-request job="\(job)" request="\(request.id)" tool="\(tool)"\(rail.map { " rail=\"\(escape($0))\"" } ?? "")\(standing ? " owner-allows=\"always\"" : "")>
-                \(action.clipped(to: 2_000, keepLines: true))
+                \(untrusted(action.clipped(to: 2_000, keepLines: true)))
                 </worker-request>
                 """
         case .question(let questions):
-            let body = questions.map { q in
+            let body = untrusted(questions.map { q in
                 "Q: \(q.question)" + (q.options.isEmpty ? "" : "\nOptions: \(q.options.joined(separator: " | "))")
-            }.joined(separator: "\n")
+            }.joined(separator: "\n"))
             return "<worker-question job=\"\(job)\" request=\"\(request.id)\">\n\(body)\n</worker-question>"
         }
     }

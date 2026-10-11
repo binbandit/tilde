@@ -26,10 +26,9 @@ extension Conductor {
         }
         Task {
             // Questions about PRs are common enough that what tilde last saw rides along, so most need no tool.
-            // Only what it already has: the message never waits on GitHub.
-            if initiativeEnabled, text.contains(/(?i)\b(PRs?|pull requests?|reviews?|CI|checks)\b/) {
-                let watching = await initiative.watching()
-                if !watching.isEmpty { body += "\n<pull_requests>\n\(watching)\n</pull_requests>" }
+            // Only what it already has: nothing here waits, so what you say goes in the order you said it.
+            if text.contains(/(?i)\b(PRs?|pull requests?|reviews?|CI|checks)\b/), !watching.isEmpty {
+                body += "\n<pull_requests>\n\(Self.untrusted(watching))\n</pull_requests>"
             }
             await manager.post(.init(
                 "<tap \(attributes)>\n\(body)\n</tap>", tap: id,
@@ -148,10 +147,12 @@ extension Conductor {
             _ = gather(taps)
             saveThread()
         case .activity(let taps, let text):
-            if let last = taps.last, let i = thread.firstIndex(where: { $0.id == last }), thread[i].streaming { thread[i].activity = text }
+            if let target = target(of: taps), let i = thread.firstIndex(where: { $0.id == target }), thread[i].streaming {
+                thread[i].activity = text
+            }
         case .replyDone(let taps, let text):
             if let last = gather(taps) { writeReply(last, text, done: true) }
-            replying = nil
+            if let replying, taps.contains(replying) { self.replying = nil }
             // Answers were already reflected on, with the question's options.
             let answers = taps.allSatisfy(answerTaps.contains)
             answerTaps.subtract(taps)
@@ -160,24 +161,26 @@ extension Conductor {
                     await scribe.reflect(on: "\(Owner.firstName): \(transcript.said)\ntilde: \(transcript.replied)")
                 }
             }
-        case .trouble(let text):
+        case .undelivered(let taps, let reason):
+            // Never reached the model: each says so under your words, with Try again.
+            trouble = reason
+            signal.yield(.trouble(reason))
+            for tap in taps {
+                if let said = unread[tap]?.message, let i = thread.firstIndex(where: { $0.id == said }) { thread[i].delivery = .failed(reason) }
+                if let i = thread.firstIndex(where: { $0.id == tap }), thread[i].text.isEmpty { thread.remove(at: i) }
+                if replying == tap { replying = nil }
+            }
+            saveThread()
+        case .trouble(let text, let taps):
             trouble = text
             signal.yield(.trouble(text))
-            // What you said never reached the model: it says so under your words, with a way to try again.
-            if let replying, let said = unread[replying]?.message, let i = thread.firstIndex(where: { $0.id == said }),
-                let reply = thread.firstIndex(where: { $0.id == replying }), thread[reply].text.isEmpty
-            {
-                thread[i].delivery = .failed(text)
-                thread.remove(at: reply)
-                self.replying = nil
-                saveThread()
-                return
-            }
-            if let replying, let i = thread.firstIndex(where: { $0.id == replying }), thread[i].text.isEmpty {
+            // It lands in the reply it interrupted, if that's still empty; otherwise on its own.
+            if let target = gather(taps), let i = thread.firstIndex(where: { $0.id == target }), thread[i].text.isEmpty {
                 thread[i].text = text
                 thread[i].trouble = true
                 thread[i].streaming = false
-                self.replying = nil
+                thread[i].activity = nil
+                if replying == target { replying = nil }
                 saveThread()
             } else {
                 append(Message(from: .tilde, text: text, trouble: true))
@@ -202,7 +205,8 @@ extension Conductor {
 
     /// Adds a message, starting a new thread when the day has turned.
     func append(_ message: Message) {
-        if !Calendar.current.isDateInToday(threadDay) {
+        // A new day starts a new thread, once nothing is still being written in the old one.
+        if !Calendar.current.isDateInToday(threadDay), !thread.contains(where: \.streaming) {
             earlier = Array(thread.filter { !$0.text.isEmpty }.suffix(Self.earlierShown)).map(\.asHistory)
             thread = []
             threadDay = .now
@@ -248,10 +252,17 @@ extension Conductor {
     private func saveThread() { threads.save(thread, day: threadDay) }
 
     /// Streams a reply into its message. Quiet taps (welcome-backs) only appear if tilde says something.
-    /// One reply answers everything said in a turn, under the last of it: earlier replies still
-    /// waiting to be written go, and any already under way stop there. Returns the one to write to.
+    /// Which tap a turn's reply belongs to: the last thing said that expects one. An answer that went
+    /// straight to an agent, or a welcome-back, doesn't take the reply from a question asked before it.
+    private func target(of taps: [String]) -> String? {
+        taps.last { !quietTaps.contains($0) && !optionalReplies.contains($0) } ?? taps.last
+    }
+
+    /// One reply answers everything said in a turn, under its target: other replies still waiting to be
+    /// written go, and any already under way stop there. Returns the one to write to.
     private func gather(_ taps: [String]) -> String? {
-        for tap in taps.dropLast() {
+        let target = target(of: taps)
+        for tap in taps where tap != target {
             optionalReplies.remove(tap)
             guard let i = thread.firstIndex(where: { $0.id == tap }), thread[i].streaming else { continue }
             if thread[i].text.isEmpty {
@@ -261,8 +272,8 @@ extension Conductor {
                 thread[i].activity = nil
             }
         }
-        if let last = taps.last, replying.map(taps.contains) ?? false { replying = last }
-        return taps.last
+        if let target, replying.map(taps.contains) ?? false { replying = target }
+        return target
     }
 
     private func writeReply(_ tap: String, _ text: String, done: Bool) {

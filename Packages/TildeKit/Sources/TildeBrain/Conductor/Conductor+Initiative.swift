@@ -11,6 +11,7 @@ extension Conductor {
         while !Task.isCancelled {
             let focused = perception?.currentContext().repo
             let found = await initiative.look(jobs: jobs, focusedRepo: focused)
+            watching = await initiative.watching()
             for (id, reason) in await initiative.moot(attention) { withdraw(id, because: reason) }
             let due = await initiative.due(found, typing: Self.typing, looking: looking)
             if !due.isEmpty { report(due) }
@@ -51,7 +52,7 @@ extension Conductor {
 
     static func describe(_ observations: [Notice]) -> String {
         observations.map { o in
-            var line = "- [\(o.urgency.rawValue)] \(o.summary)"
+            var line = "- [\(o.urgency.rawValue)] \(untrusted(o.summary))"
             if let url = o.url { line += " \(url)" }
             if let project = o.project { line += " (local checkout: \(project))" }
             if let suggestion = o.suggestion { line += " Could: \(suggestion)." }

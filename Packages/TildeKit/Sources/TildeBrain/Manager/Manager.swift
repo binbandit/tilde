@@ -21,6 +21,8 @@ public actor Manager: CodexHost {
         public var executable = "codex"
         /// How long a turn may wait on the model, with nothing at all coming back, before it's asked again.
         public var stallAfter: TimeInterval = 45
+        /// The longest any turn may take, whatever it's doing, before it's stopped.
+        public var turnLimit: TimeInterval = 300
         public init() {}
     }
 
@@ -32,7 +34,10 @@ public actor Manager: CodexHost {
         case activity(taps: [String], text: String)
         /// The model has these taps now: everything said in the running turn, the latest last.
         case read(taps: [String])
-        case trouble(String)
+        /// These taps never reached the model, and why.
+        case undelivered(taps: [String], reason: String)
+        /// Something went wrong in the turn these taps are in (none: a turn of tilde's own).
+        case trouble(String, taps: [String])
     }
 
     static let maxAttempts = 3
@@ -130,6 +135,8 @@ public actor Manager: CodexHost {
 
     /// Starts the Codex process and thread ahead of the first message.
     public func warm() async {
+        // Never mid-turn: a new day's thread waits until the running turn is done with the old one.
+        guard turn == nil else { return }
         _ = try? await ensureSession()
     }
 
@@ -164,10 +171,20 @@ public actor Manager: CodexHost {
             try await session.send(asked, effort: config.effort)
             emit.yield(.read(taps: batch.compactMap(\.tap)))
             watch()
+            await steerWaiting()
         } catch {
-            emit.yield(.trouble("I couldn't reach Codex: \(error)"))
+            emit.yield(.undelivered(taps: batch.compactMap(\.tap), reason: "I couldn't reach Codex: \(error)"))
             endTurn()
         }
+    }
+
+    /// What Brayden said while this turn was starting (or being asked again) joins it now, rather than
+    /// waiting behind it.
+    private func steerWaiting() async {
+        let waiting = inbox.filter { $0.tap != nil }
+        guard !waiting.isEmpty else { return }
+        inbox.removeAll { $0.tap != nil }
+        for message in waiting { await steer(message) }
     }
 
     private func withBriefing(_ text: String, paths: [String], jobs: [String]) async -> String {
@@ -184,11 +201,22 @@ public actor Manager: CodexHost {
             while true {
                 try? await Task.sleep(for: .seconds(min(5, config.stallAfter / 2)))
                 guard generation == mine, turn != nil, !retrying, let session else { return }
+                if Date.now.timeIntervalSince(turnStarted) > config.turnLimit { return await overran(session) }
                 if let quiet = await session.silence, quiet > config.stallAfter {
                     return await stalled(session)
                 }
             }
         }
+    }
+
+    /// A turn that has gone on too long, whatever it's doing, is stopped: nothing waits on it forever.
+    private func overran(_ session: CodexSession) async {
+        Log.info("manager", "turn still going after \(Int(config.turnLimit))s; stopping it")
+        emit.yield(.trouble("That was taking too long, so I stopped. Ask again in a moment.", taps: turn ?? []))
+        await session.interrupt()
+        try? await Task.sleep(for: .seconds(10))
+        // If even stopping it hangs, its process goes, and with it the turn.
+        if turn != nil, session === self.session { await session.stop() }
     }
 
     private func stalled(_ session: CodexSession) async {
@@ -197,10 +225,12 @@ public actor Manager: CodexHost {
         Log.info("manager", "nothing from the model in \(Int(config.stallAfter))s; asking again (\(attempts))")
         // Twice is no fluke: a fresh process, and so a fresh connection, asks again.
         guard attempts == 1 else { return await session.stop() }
+        // If Codex can't even stop the turn (or answer being asked to), the same.
+        Task {
+            try? await Task.sleep(for: .seconds(10))
+            if retrying, session === self.session { await session.stop() }
+        }
         await session.interrupt()
-        // If Codex can't even stop the turn, the same.
-        try? await Task.sleep(for: .seconds(10))
-        if retrying, session === self.session { await session.stop() }
     }
 
     /// Asks a stalled turn again: the same thread carries on from where it was; a fresh one is
@@ -208,7 +238,7 @@ public actor Manager: CodexHost {
     private func askAgain(sameThread: Bool) async {
         retrying = false
         guard attempts < Self.maxAttempts else {
-            emit.yield(.trouble("The model isn't answering right now. Try again in a minute."))
+            emit.yield(.trouble("The model isn't answering right now. Try again in a minute.", taps: turn ?? []))
             return endTurn()
         }
         streaming = ""
@@ -220,8 +250,9 @@ public actor Manager: CodexHost {
         do {
             try await ensureSession().send(text, effort: config.effort)
             watch()
+            await steerWaiting()
         } catch {
-            emit.yield(.trouble("I couldn't reach Codex: \(error)"))
+            emit.yield(.trouble("I couldn't reach Codex: \(error)", taps: turn ?? []))
             endTurn()
         }
     }
@@ -247,7 +278,8 @@ public actor Manager: CodexHost {
     private func ensureSession() async throws -> CodexSession {
         if let opening { return try await opening.value }
         let day = Date.now.day
-        if let session, sessionDay == day, await session.isRunning { return session }
+        // A turn in progress keeps its thread even across midnight; the next idle moment starts the new day's.
+        if let session, sessionDay == day || turn != nil, await session.isRunning { return session }
         if let opening { return try await opening.value }
 
         let previous = session
@@ -302,21 +334,23 @@ public actor Manager: CodexHost {
                 replyText = text
                 streaming = ""
             case .turnCompleted(let ok, let error):
-                if retrying {
+                // The answer can land just as the turn is being stopped for silence: then it's the answer.
+                if retrying, !(ok && !replyText.isEmpty) {
                     await askAgain(sameThread: true)
                     continue
                 }
-                if !ok, let error { emit.yield(.trouble(error.clipped(to: 200))) }
+                retrying = false
+                if !ok, let error { emit.yield(.trouble(error.clipped(to: 200), taps: turn ?? [])) }
                 endTurn()
             case .notice(let text):
-                emit.yield(.trouble(text.clipped(to: 200)))
+                emit.yield(.trouble(text.clipped(to: 200), taps: turn ?? []))
             case .exited(let status, let detail):
                 self.session = nil
                 if retrying {
                     await askAgain(sameThread: false)
                     continue
                 }
-                if status != 0 { emit.yield(.trouble("The manager stopped (\(status)). \(detail.clipped(to: 200))")) }
+                if status != 0 { emit.yield(.trouble("The manager stopped (\(status)). \(detail.clipped(to: 200))", taps: turn ?? [])) }
                 if turn != nil { endTurn() }
             case .itemStarted(let item):
                 if let line = Self.trace(item) {
