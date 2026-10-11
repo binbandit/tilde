@@ -13,7 +13,7 @@ extension Conductor {
         // A worktree's commits are written to the repo's own git directory.
         let writable = job.isolation == .worktree ? [(job.repoPath as NSString).appendingPathComponent(".git")] : []
         // What in that git directory makes git run code is noted now, and put back if a turn changes it.
-        if let git = writable.first { gitGuards[job.id] = GitGuard.snapshot(gitDirectory: git) }
+        if let git = writable.first { gitGuards[job.id] = await GitGuard.snapshot(gitDirectory: git) }
         let place: Supervision.Place =
             switch job.isolation {
             case .worktree: .worktree
@@ -67,14 +67,14 @@ extension Conductor {
         case .turnEnded(let ok, let text):
             turnEnded[jobID] = .now
             guard let job = jobs.first(where: { $0.id == jobID }), job.phase.isActive else { return }
-            let tampered = gitGuards[jobID]?.restore(gitDirectory: (job.repoPath as NSString).appendingPathComponent(".git")) ?? []
-            if !tampered.isEmpty {
-                let what = "The agent changed the repo's \(tampered.joined(separator: ", ")), which make git run code; tilde put them back."
-                Log.info("guard", "\(jobID): \(what)")
-                record(jobID, .tilde, .event, what)
-                emit(.said("\(job.title): \(what)", jobID: jobID))
-            }
             Task {
+                let tampered = await gitGuards[jobID]?.restore(gitDirectory: (job.repoPath as NSString).appendingPathComponent(".git")) ?? []
+                if !tampered.isEmpty {
+                    let what = "The agent changed \(tampered.joined(separator: ", ")) in the repo's git setup, which make git run code; tilde put them back."
+                    Log.info("guard", "\(jobID): \(what)")
+                    record(jobID, .tilde, .event, what)
+                    emit(.said("\(job.title): \(what)", jobID: jobID))
+                }
                 var diff: DiffStat?
                 if let base = job.baseCommit { diff = await Git.diffStat(workdir: job.workdir, base: base) }
                 // Stopped (or taken over) while that was being worked out: it stays that way.

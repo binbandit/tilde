@@ -5,6 +5,7 @@ import Testing
     @Test func approvalRepliesReadAsYesOrNo() {
         #expect(WorkerAnswer.isYes("Allow"))
         #expect(WorkerAnswer.isYes("yes please"))
+        #expect(WorkerAnswer.isYes("Yes, go ahead"))
         #expect(!WorkerAnswer.isYes("Don't allow"))
         #expect(!WorkerAnswer.isYes("no"))
         // A yes has to be the whole reply.

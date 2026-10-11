@@ -8,8 +8,10 @@ public actor ProjectIndex {
         public var stack: [String]
         /// Last time anything moved in the repo (HEAD, index), a cheap recency signal.
         public var lastActive: Date
-        /// Where `origin` points, as owner/repo: what tells apart checkouts with the same folder name.
-        public var remote: String?
+        /// Where its remotes point, as owner/repo, `origin` first: what tells apart checkouts with the same
+        /// folder name, and finds a fork's clone by the repo it was forked from (`upstream`).
+        public var remotes: [String] = []
+        public var remote: String? { remotes.first }
     }
 
     private let roots: [String]
@@ -60,7 +62,8 @@ public actor ProjectIndex {
     /// The checkout of `repo` (owner/repo), the most recently active if there are several.
     public func checkout(of repo: String) -> Project? {
         refreshIfStale()
-        return projects.filter { $0.remote?.caseInsensitiveCompare(repo) == .orderedSame }.max { $0.lastActive < $1.lastActive }
+        let mine = { (project: Project) in project.remotes.contains { $0.caseInsensitiveCompare(repo) == .orderedSame } }
+        return projects.filter(mine).max { $0.lastActive < $1.lastActive }
     }
 
     private func refreshIfStale() {
@@ -99,19 +102,25 @@ public actor ProjectIndex {
         }
         return Project(
             name: (path as NSString).lastPathComponent, path: path, stack: stack,
-            lastActive: stamps.max() ?? .distantPast, remote: Self.origin(of: path))
+            lastActive: stamps.max() ?? .distantPast, remotes: Self.remotes(of: path))
     }
 
-    /// owner/repo from the checkout's `origin` URL (https or ssh), read from its git config.
-    static func origin(of path: String) -> String? {
-        guard let config = try? String(contentsOfFile: "\(path)/.git/config", encoding: .utf8) else { return nil }
-        var inOrigin = false
+    /// owner/repo for each of the checkout's remotes (https or ssh URLs), `origin` first, read from its git config.
+    static func remotes(of path: String) -> [String] {
+        guard let config = try? String(contentsOfFile: "\(path)/.git/config", encoding: .utf8) else { return [] }
+        var found: [(name: String, repo: String)] = []
+        var current: String?
         for line in config.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }) {
-            if line.hasPrefix("[") { inOrigin = line == "[remote \"origin\"]" }
-            guard inOrigin, line.hasPrefix("url"), let url = line.split(separator: "=", maxSplits: 1).last else { continue }
-            return remote(fromURL: url.trimmingCharacters(in: .whitespaces))
+            if line.hasPrefix("[") {
+                current = line.hasPrefix("[remote \"") ? String(line.dropFirst(9).prefix { $0 != "\"" }) : nil
+                continue
+            }
+            guard let current, line.hasPrefix("url"), let url = line.split(separator: "=", maxSplits: 1).last,
+                let repo = remote(fromURL: url.trimmingCharacters(in: .whitespaces))
+            else { continue }
+            found.append((current, repo))
         }
-        return nil
+        return found.sorted { ($0.name == "origin" ? 0 : 1) < ($1.name == "origin" ? 0 : 1) }.map(\.repo)
     }
 
     /// `git@github.com:owner/repo.git` or `https://github.com/owner/repo` as `owner/repo`.

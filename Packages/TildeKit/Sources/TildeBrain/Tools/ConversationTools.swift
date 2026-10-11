@@ -47,7 +47,8 @@ extension Conductor {
         if case .permission = pending?.request.kind { isApproval = true }
         let item = Attention(
             id: IDs.make("a"), jobID: jobID, question: question,
-            options: options.isEmpty && isApproval ? ["Allow", "Don't allow"] : options,
+            // A permission is a yes or a no, so its answers are exactly that, whatever labels the manager offered.
+            options: isApproval ? ["Allow", "Don't allow"] : options,
             recommended: args["recommended"]?.int, detail: args["detail"]?.string, requestID: pending == nil ? nil : requestID,
             isApproval: isApproval)
         raise(item)

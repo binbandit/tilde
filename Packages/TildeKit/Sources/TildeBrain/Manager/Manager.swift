@@ -85,6 +85,8 @@ public actor Manager: CodexHost {
     private var attempts = 0
     /// Set while a stalled turn is being stopped, to be asked again.
     private var retrying = false
+    /// Set while a turn that ran too long is being stopped; what's said meanwhile waits for the next turn.
+    private var stopping = false
     /// Counts turns, so a watchdog only ever watches its own.
     private var generation = 0
 
@@ -96,7 +98,7 @@ public actor Manager: CodexHost {
     }
 
     public func post(_ message: Message) {
-        if message.tap != nil, turn != nil, !retrying {
+        if message.tap != nil, turn != nil, !retrying, !stopping {
             Task { await self.steer(message) }
             return
         }
@@ -196,7 +198,7 @@ public actor Manager: CodexHost {
             while true {
                 try? await Task.sleep(for: .seconds(min(5, config.stallAfter / 2)))
                 guard generation == mine, turn != nil, !retrying, let session else { return }
-                if Date.now.timeIntervalSince(turnStarted) > config.turnLimit { return await overran(session) }
+                if Date.now.timeIntervalSince(turnStarted) > config.turnLimit { return await overran(session, turn: mine) }
                 if let quiet = await session.silence, quiet > config.stallAfter {
                     return await stalled(session)
                 }
@@ -205,13 +207,17 @@ public actor Manager: CodexHost {
     }
 
     /// A turn that has gone on too long, whatever it's doing, is stopped: nothing waits on it forever.
-    private func overran(_ session: CodexSession) async {
+    private func overran(_ session: CodexSession, turn mine: Int) async {
         Log.info("manager", "turn still going after \(Int(config.turnLimit))s; stopping it")
-        emit.yield(.trouble("That was taking too long, so I stopped. Ask again in a moment.", taps: turn ?? []))
+        stopping = true
+        // Only someone who asked hears about it; a turn of tilde's own just ends.
+        if let taps = turn, !taps.isEmpty { emit.yield(.trouble("That was taking too long, so I stopped. Ask again in a moment.", taps: taps)) }
+        Task {
+            try? await Task.sleep(for: .seconds(10))
+            // If even stopping it hangs, its process goes, and with it the turn (this one, never the next).
+            if generation == mine, turn != nil, session === self.session { await session.stop() }
+        }
         await session.interrupt()
-        try? await Task.sleep(for: .seconds(10))
-        // If even stopping it hangs, its process goes, and with it the turn.
-        if turn != nil, session === self.session { await session.stop() }
     }
 
     private func stalled(_ session: CodexSession) async {
@@ -257,6 +263,7 @@ public actor Manager: CodexHost {
         let taps = turn ?? []
         if !taps.isEmpty { emit.yield(.replyDone(taps: taps, text: replyText, said: said)) }
         said = ""
+        stopping = false
         turn = nil
         pump()
     }
@@ -326,7 +333,7 @@ public actor Manager: CodexHost {
                     continue
                 }
                 retrying = false
-                if !ok, let error { emit.yield(.trouble(error.clipped(to: 200), taps: turn ?? [])) }
+                if !ok, !stopping, let error { emit.yield(.trouble(error.clipped(to: 200), taps: turn ?? [])) }
                 endTurn()
             case .notice(let text):
                 emit.yield(.trouble(text.clipped(to: 200), taps: turn ?? []))

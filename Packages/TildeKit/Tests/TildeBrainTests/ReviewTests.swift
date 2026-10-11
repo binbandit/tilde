@@ -54,7 +54,7 @@ import TildeWork
         for tool in [
             "list_issues", "get_issue", "search_documentation", "read_file", "query_database", "view_page", "getIssue",
             "List issues", "get-diff", "get_commit", "list_comments", "get_workflow_run", "get_app_state", "gmail.search_emails",
-            "google_calendar.list_events",
+            "google_calendar.list_events", "get_pull_request", "list_pull_requests",
         ] {
             #expect(ReadOnlyTools.allows(tool), "\(tool)")
         }
@@ -63,7 +63,7 @@ import TildeWork
             "get_or_create_label", "list_and_archive", "fetchAndUpdate", "click", "js", "extract_images", "mcp__linear__list_issues", "",
             "gmail.send_email", "get.delete_event", "sites.create_site",
             // A read of anything at all can write, or send what was read elsewhere.
-            "fetch", "fetch_url", "query_sql", "search_web", "get_request",
+            "fetch", "fetch_url", "query_sql", "search_web", "get_url",
         ] {
             #expect(!ReadOnlyTools.allows(tool), "\(tool)")
         }

@@ -38,6 +38,9 @@ public actor ClaudeSession {
     private var sent: Set<String> = []
     /// The command Claude says it's running (`command_lifecycle`), if it says.
     private var running: String?
+    /// What tilde sent that Claude hasn't answered yet, oldest first. One sent mid-turn is queued and run as
+    /// a turn of its own, each `result` naming the message it answered: tilde's turn has ended when none wait.
+    private var waitingOn: [String] = []
     /// Whether what Claude is saying belongs to one of tilde's turns.
     private var isOurs: Bool { running.map(sent.contains) ?? true }
 
@@ -68,6 +71,7 @@ public actor ClaudeSession {
     public func send(_ text: String) throws {
         let id = UUID().uuidString.lowercased()
         sent.insert(id)
+        waitingOn.append(id)
         try write([
             "type": "user", "uuid": .string(id), "session_id": "",
             "message": ["role": "user", "content": .string(text)], "parent_tool_use_id": nil,
@@ -182,7 +186,13 @@ public actor ClaudeSession {
                     output: Self.flatten(block["content"])))
             }
         case "result":
-            guard isOurs, message["local_command"]?.isNull ?? true else { return }
+            // A result names the message it answered. One for something Claude ran on its own (a plugin's
+            // command) isn't tilde's; without a name (older versions), a local command's isn't either.
+            let answered = message["user_message_uuid"]?.string
+            if let answered, !sent.contains(answered) { return }
+            if answered == nil, !(message["local_command"]?.isNull ?? true) || !isOurs { return }
+            if let answered { waitingOn.removeAll { $0 == answered } } else if !waitingOn.isEmpty { waitingOn.removeFirst() }
+            guard waitingOn.isEmpty else { return }
             emit.yield(.turnDone(ClaudeTurn(
                 ok: message["subtype"]?.string == "success" && !(message["is_error"]?.bool ?? false),
                 text: message["result"]?.string ?? message["errors"]?.array?.compactMap(\.string).joined(separator: "\n") ?? "",

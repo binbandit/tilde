@@ -77,11 +77,19 @@ extension Conductor {
         let job = item.jobID.flatMap { id in jobs.first { $0.id == id } }
         if always, let job {
             // "Always" to a rail is kept as exactly that rail in that project, which is all it covers.
-            if let asked, case .permission(_, _, let rail?) = asked.request.kind, WorkerAnswer.isYes(reply) {
-                allowAlways(rail, job: job.id)
-                Task { try? await memory.notebook.addRule("Always allowed in \(job.projectName): \(rail).") }
+            if let asked, case .permission(_, _, let rail) = asked.request.kind {
+                // For a permission, Always means always allow, of exactly that rail in that repo; a no stays a no.
+                if let rail, WorkerAnswer.isYes(reply), allowAlways(rail, job: job.id) {
+                    Task { [dreamer] in
+                        await dreamer?.whenIdle()
+                        try? await memory.notebook.addRule("Always allowed in \(job.projectName): \(rail).")
+                    }
+                }
             } else {
-                Task { try? await memory.notebook.addRule("\(reply) when asked \"\(item.question)\" in \(job.projectName).") }
+                Task { [dreamer] in
+                    await dreamer?.whenIdle()
+                    try? await memory.notebook.addRule("\(reply) when asked \"\(item.question)\" in \(job.projectName).")
+                }
             }
         }
         if let jobID = item.jobID {
@@ -92,10 +100,8 @@ extension Conductor {
         // Your answer is a message like any other: tilde reads it and says what happens now. An answer
         // that went straight to an agent usually needs no word, so its reply only appears if there is one.
         let id = IDs.make("t")
-        var said = Message(from: .you, text: reply + (always ? " (always)" : ""), jobs: item.jobID.map { [$0] } ?? [])
-        said.delivery = .sent
-        unread[id] = (said.id, TapContext(jobID: item.jobID))
-        append(said)
+        // No receipt on an answer: it's an answer to a question, not something to send again.
+        append(Message(from: .you, text: reply + (always ? " (always)" : ""), jobs: item.jobID.map { [$0] } ?? []))
         if forwarded {
             quietTaps.insert(id)
         } else {

@@ -15,6 +15,14 @@ public actor Dreamer {
     /// The day's evidence as text for the model. Gathering it is the app's business.
     private let evidence: @Sendable (_ day: Date) async -> String
     private var running = false
+    /// When a dream last failed: a day that won't dream is tried again every few hours, not on every message.
+    private var failedAt: Date?
+
+    /// Waits for whatever pass is running to finish: one at a time writes the notebook, and a rule the owner
+    /// adds meanwhile isn't put back by the pass's guard on rules.md.
+    public func whenIdle() async {
+        while running { try? await Task.sleep(for: .seconds(2)) }
+    }
 
     public init(
         memory: Memory, home: TildeHome, model: any MemoryModel, evidence: @escaping @Sendable (_ day: Date) async -> String
@@ -29,7 +37,7 @@ public actor Dreamer {
     /// whose dream fails is tried again next time rather than skipped.
     public func catchUp(now: Date = .now) async {
         let calendar = Calendar.current
-        guard !running, calendar.component(.hour, from: now) >= 4,
+        guard !running, calendar.component(.hour, from: now) >= 4, failedAt.map({ now.timeIntervalSince($0) > 3 * 3600 }) ?? true,
             let yesterday = calendar.date(byAdding: .day, value: -1, to: calendar.startOfDay(for: now)),
             let weekAgo = calendar.date(byAdding: .day, value: -6, to: yesterday)
         else { return }
@@ -53,7 +61,11 @@ public actor Dreamer {
         Log.info("dream", "dreaming about \(Notebook.journalName(for: day)) (\(evidence.count) chars of evidence)")
 
         guard await run(evidence, instructions: Self.instructions(owner: Owner.firstName, day: day), commit: "dream about \(day.day)")
-        else { return false }
+        else {
+            failedAt = .now
+            return false
+        }
+        failedAt = nil
         lastDreamt = day
         return true
     }
@@ -64,6 +76,7 @@ public actor Dreamer {
     /// keep into me.md and writes a note for each of their most active projects.
     /// `evidence` gathers those instructions and projects.
     public func introduce(evidence: @Sendable () async -> String) async {
+        await whenIdle()
         running = true
         defer { running = false }
         await run(await evidence(), instructions: Self.meeting(owner: Owner.firstName), commit: "first meeting")

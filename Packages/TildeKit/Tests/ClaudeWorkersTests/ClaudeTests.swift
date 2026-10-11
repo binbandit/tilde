@@ -23,9 +23,6 @@ import WorkerKit
         let sandbox = ClaudeSandbox.settings(writable: ["/repo/.git"])["sandbox"]
         #expect(sandbox?["enabled"] == true)
         #expect(sandbox?["filesystem"]?["allowWrite"]?.array?.first == "/repo/.git")
-        // Commits land, but nothing that makes git run code can be written.
-        let denied = sandbox?["filesystem"]?["denyWrite"]?.array?.compactMap(\.string) ?? []
-        #expect(denied.contains("/repo/.git/config") && denied.contains("/repo/.git/hooks"))
         #expect(sandbox?["network"]?["allowedDomains"]?.array?.contains("registry.npmjs.org") == true)
         #expect(ClaudeSandbox.newHosts(["command": "curl x", "allowed_domains": ["example.com"]]) == ["example.com"])
         #expect(ClaudeSandbox.newHosts(["command": "swift test"]) == nil)

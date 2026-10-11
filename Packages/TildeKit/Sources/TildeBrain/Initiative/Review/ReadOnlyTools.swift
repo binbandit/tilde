@@ -30,7 +30,7 @@ enum ReadOnlyTools {
 
     /// What a "read" can't be about: a tool that fetches any URL, runs any query or makes any request can
     /// write, or carry what the review has read (mail, the calendar, the notebook) somewhere else.
-    private static let anything: Set<String> = ["url", "urls", "sql", "http", "https", "request", "requests", "web", "webpage", "raw", "graphql"]
+    private static let anything: Set<String> = ["url", "urls", "sql", "http", "https", "web", "webpage", "raw", "graphql"]
 
     /// Whether a connector tool reads like a read: it starts with a reading verb, names what it reads (not just
     /// anything: a URL, SQL, the web), and says nothing about changing anything. Account connectors namespace

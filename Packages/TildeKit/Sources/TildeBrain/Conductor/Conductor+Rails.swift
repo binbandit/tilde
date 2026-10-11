@@ -7,7 +7,7 @@ import WorkerKit
 extension Conductor {
     private var allowedURL: URL { home.state.appending(path: "allowed.json") }
 
-    /// Rails the owner has said always to allow, by project.
+    /// Rails the owner has said always to allow, by repo (its path: folder names repeat).
     var standingAllows: [String: Set<String>] {
         get { (try? Data(contentsOf: allowedURL)).flatMap { try? JSONDecoder().decode([String: Set<String>].self, from: $0) } ?? [:] }
         set { if let data = try? JSONEncoder().encode(newValue) { try? data.write(to: allowedURL, options: .atomic) } }
@@ -16,13 +16,16 @@ extension Conductor {
     /// The rail a request crosses, if it's one the owner hasn't already allowed for good in its project.
     func unallowedRail(_ request: WorkerRequest, job jobID: String) -> String? {
         guard case .permission(_, _, let rail?) = request.kind else { return nil }
-        let project = job(jobID)?.projectName ?? ""
-        return standingAllows[project]?.contains(rail) == true ? nil : rail
+        let repo = job(jobID)?.repoPath ?? ""
+        return standingAllows[repo]?.contains(rail) == true ? nil : rail
     }
 
-    /// The owner said Always to a rail in this job's project.
-    func allowAlways(_ rail: String, job jobID: String) {
-        guard let project = job(jobID)?.projectName else { return }
-        standingAllows[project, default: []].insert(rail)
+    /// The owner said Always to a rail in this job's repo. One that would cover anything at all (running
+    /// outside the sandbox) is allowed this once only.
+    @discardableResult
+    func allowAlways(_ rail: String, job jobID: String) -> Bool {
+        guard let job = job(jobID), job.isolation != .scratch, !Rails.neverStanding.contains(rail) else { return false }
+        standingAllows[job.repoPath, default: []].insert(rail)
+        return true
     }
 }

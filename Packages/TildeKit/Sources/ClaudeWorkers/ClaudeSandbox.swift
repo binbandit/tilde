@@ -28,13 +28,9 @@ public enum ClaudeSandbox {
                 "enabled": true,
                 // Inside the sandbox a command can't reach anything that matters, so it needn't ask.
                 "autoAllowBashIfSandboxed": true,
-                "filesystem": [
-                    "allowWrite": .array((writable + caches).map { .string($0) }),
-                    // A repo's git directory is writable so commits land, but not the parts that make git run code.
-                    "denyWrite": .array(writable.filter { $0.hasSuffix(".git") }.flatMap { git in
-                        ["config", "config.worktree", "hooks", "info", "modules"].map { .string("\(git)/\($0)") }
-                    }),
-                ],
+                // A repo's git directory is writable so commits land (and installers that set up hooks work);
+                // what in it makes git run code is put back after each turn (GitGuard).
+                "filesystem": ["allowWrite": .array((writable + caches).map { .string($0) })],
                 // Dev servers listen on localhost.
                 "network": ["allowedDomains": .array(hosts.map { .string($0) }), "allowLocalBinding": true],
             ],

@@ -54,7 +54,7 @@ extension Conductor {
         let found = await projects.search(args["query"]?.string ?? "")
         guard !found.isEmpty else { return .ok("No matching repos under \(ProjectIndex.defaultRoots.joined(separator: ", ")).") }
         return .ok(found.map { p in
-            "\(p.name)  \(p.path)\(p.remote.map { "  (origin \($0))" } ?? "")  [\(p.stack.joined(separator: ", "))]  active \(p.lastActive.formatted(.relative(presentation: .named)))"
+            "\(p.name)  \(p.path)\(p.remotes.isEmpty ? "" : "  (remotes \(p.remotes.joined(separator: ", ")))")  [\(p.stack.joined(separator: ", "))]  active \(p.lastActive.formatted(.relative(presentation: .named)))"
         }.joined(separator: "\n"))
     }
 

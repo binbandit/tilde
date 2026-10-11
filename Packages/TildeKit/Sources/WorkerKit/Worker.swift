@@ -70,8 +70,9 @@ public enum WorkerAnswer: Sendable {
     public static func isYes(_ reply: String) -> Bool {
         let words = reply.lowercased().split { !$0.isLetter }.joined(separator: " ")
         return [
-            "allow", "allow it", "yes", "yes please", "yep", "yeah", "y", "approve", "approved", "ok", "okay", "sure",
-            "go ahead", "do it", "fine",
+            "allow", "allow it", "allow once", "yes", "yes please", "yep", "yeah", "y", "approve", "approved", "approve it",
+            "ok", "okay", "sure", "fine", "go ahead", "go for it", "do it", "yes go ahead", "yes do it", "yep go ahead",
+            "sure go ahead", "ok go ahead", "okay go ahead", "ok do it", "yes allow it",
         ].contains(words)
     }
 }

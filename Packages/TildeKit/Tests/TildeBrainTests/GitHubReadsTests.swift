@@ -9,6 +9,7 @@ import Testing
             ["api", "repos/binbandit/oh-fx/pulls/796/comments"],
             ["api", "repos/binbandit/oh-fx/pulls", "-X", "GET", "--paginate", "--jq", ".[].number"],
             ["api", "graphql", "-f", "query=query { viewer { login } }"],
+            ["pr", "list", "--author", "@me"], ["search", "prs", "--review-requested=@me", "--state", "open"],
         ] {
             #expect(GitHubReads.refusal(args) == nil, "\(args)")
         }

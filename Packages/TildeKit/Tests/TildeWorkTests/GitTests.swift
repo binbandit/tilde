@@ -87,3 +87,18 @@ import WorkerKit
         #expect(ProjectIndex.remote(fromURL: "nonsense") == nil)
     }
 }
+
+@Suite struct ProjectRemotesTests {
+    /// A fork's clone is found by the repo it was forked from, too.
+    @Test func everyRemoteCountsOriginFirst() throws {
+        let repo = FileManager.default.temporaryDirectory.appending(path: "tilde-remotes-\(UUID().uuidString)").path
+        try FileManager.default.createDirectory(atPath: "\(repo)/.git", withIntermediateDirectories: true)
+        try """
+            [remote "upstream"]
+            \turl = https://github.com/org/x.git
+            [remote "origin"]
+            \turl = git@github.com:me/x.git
+            """.write(toFile: "\(repo)/.git/config", atomically: true, encoding: .utf8)
+        #expect(ProjectIndex.remotes(of: repo) == ["me/x", "org/x"])
+    }
+}

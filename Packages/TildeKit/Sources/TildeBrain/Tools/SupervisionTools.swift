@@ -68,9 +68,11 @@ extension Conductor {
             $0.diff = diff
             $0.ticker = "Ready for review"
         }
-        // Its agent can rest (a message to the job picks its session back up), unless it was handed words
-        // since its last turn ended, which it may still be working through.
-        if (handed[id] ?? .distantPast) <= (turnEnded[id] ?? .distantPast) { await stopWorker(id) }
+        // Its agent can rest, if a message to the job can pick its session back up (otherwise it would start
+        // over knowing nothing) and it hasn't been handed words since its last turn, which it may still be on.
+        if job.harness.spec?.resumeCommand != nil, (handed[id] ?? .distantPast) <= (turnEnded[id] ?? .distantPast) {
+            await stopWorker(id)
+        }
         log.outcome(id, "\(summary)\n\nChanges: \(diff?.label ?? "unknown")")
         record(id, .tilde, .event, "Ready for review: \(summary)")
         log.journal("\(job.title) in \(job.projectName) is ready for review (\(id))")

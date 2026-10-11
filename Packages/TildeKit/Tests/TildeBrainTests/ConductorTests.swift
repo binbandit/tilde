@@ -227,14 +227,18 @@ final class LaunchLog: Sendable {
         #expect(waved.isError && waved.text.contains("Pushes to a remote"))
 
         // ...the owner can, and "Always" then covers exactly that rail in that project.
-        _ = await call(conductor, "ask", ["question": "Push the nav?", "options": ["Allow", "Don't allow"], "request": "r-push"])
+        // A permission's answers are a plain yes and no, whatever the manager labelled them.
+        _ = await call(conductor, "ask", ["question": "Push the nav?", "options": ["Allow push", "Deny"], "request": "r-push"])
         let item = try #require(conductor.attention.first)
+        #expect(item.options == ["Allow", "Don't allow"])
         conductor.answer(item.id, with: "Allow", always: true)
         try await waitFor(conductor) { conductor.attention.isEmpty && conductor.jobs.first?.phase != .needsYou }
         let push = WorkerRequest(id: "r-2", kind: .permission(tool: "Bash", action: "git push", rail: "Pushes to a remote"))
         let deploy = WorkerRequest(id: "r-3", kind: .permission(tool: "Bash", action: "vercel deploy --prod", rail: "Deploys"))
         #expect(conductor.unallowedRail(push, job: job.id) == nil)
         #expect(conductor.unallowedRail(deploy, job: job.id) == "Deploys")
+        // Running outside the sandbox can't be allowed for good: it would cover anything.
+        #expect(!conductor.allowAlways(Rails.outsideSandbox, job: job.id))
     }
 
     @Test func aReplyARestartCutOffSaysSoInsteadOfTypingForever() async throws {

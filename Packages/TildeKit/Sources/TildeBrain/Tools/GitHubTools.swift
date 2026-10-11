@@ -66,7 +66,10 @@ enum GitHubReads {
         if let arg = args.first(where: { arg in banned.contains { arg == $0 || arg.hasPrefix("\($0)=") } }) {
             return "\(arg) isn't allowed: only reading GitHub, from GitHub."
         }
-        if args.contains(where: { $0.hasPrefix("@") || $0.contains("=@") }) { return "Values can't come from files or stdin." }
+        // `@file` and `@-` read a file or stdin; `@me` is just you.
+        if args.contains(where: { ($0.hasPrefix("@") || $0.contains("=@")) && !$0.hasSuffix("@me") }) {
+            return "Values can't come from files or stdin."
+        }
         // A repo named with a host ([HOST/]OWNER/REPO) would send the request somewhere else.
         for (i, arg) in args.enumerated() where arg == "-R" || arg == "--repo" || arg.hasPrefix("--repo=") {
             let repo = arg.hasPrefix("--repo=") ? String(arg.dropFirst(7)) : args.indices.contains(i + 1) ? args[i + 1] : ""
