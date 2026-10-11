@@ -31,6 +31,8 @@ public actor CodexSession {
     public private(set) var lastHeard = Date.now
     /// Tool calls, commands and the like in flight: while one runs, quiet is expected.
     private var working: Set<String> = []
+    /// A terminal error notification is followed by turn/completed. Report it there once.
+    private var turnError: String?
 
     public struct Failure: Error, CustomStringConvertible {
         public var description: String
@@ -171,7 +173,7 @@ public actor CodexSession {
         for continuation in pending.values { continuation.resume(returning: .failure(Failure(description: "Codex exited"))) }
         pending = [:]
         activeTurn = nil
-        emit.yield(.exited(status: status, detail: String(process.stderr.suffix(2000))))
+        emit.yield(.exited(status: status, detail: turnError ?? String(process.stderr.suffix(2000))))
         emit.finish()
     }
 
@@ -200,6 +202,7 @@ public actor CodexSession {
         case "turn/started":
             activeTurn = params["turn"]?["id"]?.string ?? activeTurn
             working = []
+            turnError = nil
             emit.yield(.turnStarted(id: activeTurn ?? ""))
         case "item/agentMessage/delta":
             if let delta = params["delta"]?.string { emit.yield(.textDelta(delta)) }
@@ -217,10 +220,12 @@ public actor CodexSession {
             working = []
             let turn = params["turn"]
             emit.yield(.turnCompleted(
-                ok: turn?["status"]?.string == "completed", error: turn?["error"]?["message"]?.string))
+                ok: turn?["status"]?.string == "completed", error: turn?["error"]?["message"]?.string ?? turnError))
+            turnError = nil
         case "error":
             if params["willRetry"]?.bool != true, let text = params["error"]?["message"]?.string {
-                emit.yield(.notice(text))
+                if activeTurn != nil { turnError = text }
+                else { emit.yield(.notice(text)) }
             }
         default:
             break
