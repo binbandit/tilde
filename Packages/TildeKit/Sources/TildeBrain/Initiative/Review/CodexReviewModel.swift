@@ -6,7 +6,8 @@ import TildeSupport
 /// at the owner's connected apps (the MCP servers they configured for Codex) but never change
 /// anything in them. See `ReadOnlyTools` for how.
 public struct CodexReviewModel: MemoryModel {
-    public var model: String
+    public var model: String?
+    public var modelProvider: String?
     public var effort: String
     public var executable: String
     /// Extra `-c` config overrides for the Codex process.
@@ -15,10 +16,11 @@ public struct CodexReviewModel: MemoryModel {
     public var timeout: Duration
 
     public init(
-        model: String = "gpt-6.1-sol", effort: String = "medium", executable: String = "codex", overrides: [String] = [],
-        timeout: Duration = .seconds(240)
+        model: String? = nil, effort: String = "medium", executable: String = "codex", overrides: [String] = [],
+        timeout: Duration = .seconds(240), modelProvider: String? = nil
     ) {
         self.model = model
+        self.modelProvider = modelProvider
         self.effort = effort
         self.executable = executable
         self.overrides = overrides
@@ -40,7 +42,8 @@ public struct CodexReviewModel: MemoryModel {
         }
         try await running.start()
         try await running.startThread([
-            "cwd": .string(pass.workdir), "model": .string(model), "approvalPolicy": ReadOnlyTools.approvalPolicy,
+            "cwd": .string(pass.workdir), "model": model.map(JSON.string) ?? nil,
+            "modelProvider": modelProvider.map(JSON.string) ?? nil, "approvalPolicy": ReadOnlyTools.approvalPolicy,
             "sandbox": "read-only", "ephemeral": true, "baseInstructions": .string(pass.instructions),
             "config": ReadOnlyTools.fence(try await running.readConfig()),
         ])

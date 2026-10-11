@@ -4,7 +4,7 @@ import TildeMemory
 import TildeSupport
 import WorkerKit
 
-/// The manager: a Codex thread (gpt-6.1-sol by default, cheap and quick) whose
+/// The manager: a Codex thread using the owner's configured model whose
 /// tools are tilde's orchestration toolset and whose memory is the notebook.
 ///
 /// Messages are handled one turn at a time. What tilde hears while a turn runs is batched
@@ -16,7 +16,10 @@ import WorkerKit
 /// for five minutes) is asked again after `Config.stallAfter`.
 public actor Manager: CodexHost {
     public struct Config: Sendable {
-        public var model = "gpt-6.1-sol"
+        /// Nil inherits Codex's configured model, including gateway routing aliases.
+        public var model: String?
+        /// The ID in Codex's model_providers table; nil inherits its configured provider.
+        public var modelProvider: String?
         public var effort = "low"
         public var executable = "codex"
         /// How long a turn may wait on the model, with nothing at all coming back, before it's asked again.
@@ -259,8 +262,8 @@ public actor Manager: CodexHost {
     }
 
     private func endTurn() {
+        guard let taps = turn else { return }
         Log.info("manager", "turn done in \(String(format: "%.1f", Date.now.timeIntervalSince(turnStarted)))s: \(replyText.clipped(to: 200))")
-        let taps = turn ?? []
         if !taps.isEmpty { emit.yield(.replyDone(taps: taps, text: replyText, said: said)) }
         said = ""
         stopping = false
@@ -297,7 +300,8 @@ public actor Manager: CodexHost {
             try await session.start()
             try await session.startThread([
                 "cwd": .string(memory.notebook.path),
-                "model": .string(config.model),
+                "model": config.model.map(JSON.string) ?? nil,
+                "modelProvider": config.modelProvider.map(JSON.string) ?? nil,
                 "approvalPolicy": "never",
                 // Read anything to understand a project; change nothing. Workers change things.
                 "sandbox": "read-only",
@@ -327,6 +331,7 @@ public actor Manager: CodexHost {
                 replyText = text
                 streaming = ""
             case .turnCompleted(let ok, let error):
+                guard turn != nil else { continue }
                 // The answer can land just as the turn is being stopped for silence: then it's the answer.
                 if retrying, !(ok && !replyText.isEmpty) {
                     await askAgain(sameThread: true)
@@ -343,7 +348,7 @@ public actor Manager: CodexHost {
                     await askAgain(sameThread: false)
                     continue
                 }
-                if status != 0 { emit.yield(.trouble("The manager stopped (\(status)). \(detail.clipped(to: 200))", taps: turn ?? [])) }
+                if status != 0, !stopping, let taps = turn { emit.yield(.trouble("The manager stopped (\(status)). \(detail.clipped(to: 200))", taps: taps)) }
                 if turn != nil { endTurn() }
             case .itemStarted(let item):
                 if let line = Self.trace(item) {

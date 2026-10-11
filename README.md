@@ -15,7 +15,7 @@ It isn't an app. There's no window, no Dock icon, no menu-bar item. tilde lives 
 
 ## How it works
 
-- The **manager** is a Codex thread (gpt-6.1-sol by default: quick and cheap) with tilde's orchestration tools, briefed before every turn with the notes relevant to what you said.
+- The **manager** is a Codex thread using your configured model and provider, with tilde's orchestration tools, briefed before every turn with the notes relevant to what you said. [Portkey and work gateways](docs/GATEWAYS.md) use the same Codex configuration.
 - **Workers** are the agent CLIs you already use, with your own logins: Claude Code, Codex, and the ACP and stream-JSON harnesses (see `docs/harnesses/`). Each job gets its own git worktree, so agents never touch your checkout until you bring the work in.
 - **Hard rails** in code: pushes, pull requests, deploys, and anything outside a job's worktree always come to the manager as explicit requests, and to you unless your rules allow them.
 - **Memory** has four parts: the notebook (truth), a hybrid index (SQLite FTS5 plus on-device embeddings), a **scribe** that files lasting facts after each exchange, and a nightly **dream** that turns the day's evidence into a journal and fresher notes. See `docs/MEMORY.md`.

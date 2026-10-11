@@ -5,12 +5,14 @@ import TildeSupport
 /// The scribe's and the dream's model: each pass is its own ephemeral Codex thread,
 /// in a fresh process that never asks anyone anything.
 public struct CodexMemoryModel: MemoryModel {
-    public var model: String
+    public var model: String?
+    public var modelProvider: String?
     public var effort: String
     public var executable: String
 
-    public init(model: String = "gpt-6.1-sol", effort: String, executable: String = "codex") {
+    public init(model: String? = nil, effort: String, executable: String = "codex", modelProvider: String? = nil) {
         self.model = model
+        self.modelProvider = modelProvider
         self.effort = effort
         self.executable = executable
     }
@@ -20,7 +22,8 @@ public struct CodexMemoryModel: MemoryModel {
         defer { Task { await session.stop() } }
         try await session.start()
         try await session.startThread([
-            "cwd": .string(pass.workdir), "model": .string(model), "approvalPolicy": "never",
+            "cwd": .string(pass.workdir), "model": model.map(JSON.string) ?? nil,
+            "modelProvider": modelProvider.map(JSON.string) ?? nil, "approvalPolicy": "never",
             "sandbox": pass.writable ? "workspace-write" : "read-only", "ephemeral": true,
             "baseInstructions": .string(pass.instructions), "config": try await session.serversOff(),
         ])
