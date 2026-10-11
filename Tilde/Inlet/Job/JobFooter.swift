@@ -11,6 +11,8 @@ struct JobFooter: View {
     var onClose: () -> Void
     @State private var busy = false
     @State private var problem: String?
+    /// Discard was clicked once: the next click deletes the branch and the worktree.
+    @State private var discarding = false
 
     /// The worktree (or scratch folder) is still there to open, take over or discard.
     private var hasWorkdir: Bool { FileManager.default.fileExists(atPath: job.workdir) }
@@ -31,13 +33,13 @@ struct JobFooter: View {
             }
             if hasActions {
                 HStack(spacing: 8) {
-                    secondary
+                    secondary.disabled(busy)
                     if let problem {
                         Text(problem).font(.system(size: 12)).foregroundStyle(Theme.failed).lineLimit(2)
                     }
                     Spacer()
                     if busy { ProgressView().controlSize(.small) }
-                    primary
+                    primary.disabled(busy)
                 }
             }
         }
@@ -50,7 +52,20 @@ struct JobFooter: View {
 
     @ViewBuilder private var secondary: some View {
         if hasWorkdir, !job.phase.isActive, job.phase != .landed, job.isolation != .inPlace {
-            Button("Discard") { act { await model.discard(job.id) } }.buttonStyle(.outline(large: true, destructive: true))
+            // Nothing brings a discarded branch back, so it takes a second click.
+            Button(discarding ? "Delete \(job.branch ?? "the work")?" : "Discard") {
+                guard discarding else {
+                    discarding = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(4))
+                        discarding = false
+                    }
+                    return
+                }
+                act { await model.discard(job.id) }
+            }
+            .buttonStyle(.outline(large: true, destructive: true))
+            .animation(Theme.quick, value: discarding)
         }
         if job.takeOverCommand != nil, hasWorkdir, job.phase != .landed {
             Button("Take over") { act { await model.takeOver(job) } }.buttonStyle(.outline(large: true))
@@ -134,7 +149,7 @@ private struct AgentComposer: View {
                     Button("Message \(job.harness.label) instead") { newMessage = true }
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.text3)
+                        .foregroundStyle(Theme.text2)
                 }
                 .padding(.top, 3)
                 .padding(.trailing, 5)
@@ -168,7 +183,8 @@ private struct AgentComposer: View {
         if typed {
             ComposerButton(icon: "arrow.up", filled: true, help: question == nil ? "Send to \(job.harness.label)" : "Answer", action: send)
                 .transition(.scale(scale: 0.6).combined(with: .opacity))
-        } else if job.phase.isActive {
+        } else if job.phase.isActive, question == nil {
+            // Not while you're answering, where a round button at the end would read as Send.
             ComposerButton(icon: "stop.fill", filled: false, help: "Stop \(job.harness.label)", action: stop)
                 .transition(.scale(scale: 0.6).combined(with: .opacity))
         }

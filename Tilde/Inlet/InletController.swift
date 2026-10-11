@@ -37,6 +37,8 @@ final class InletController {
     @ObservationIgnored private var seen: Set<String>
     /// A job opened from the conversation closes back to it, as a detail does in a messaging app.
     @ObservationIgnored private var backToConversation = false
+    /// Where the pointer was when the current peek came out: one already resting there didn't come for it.
+    @ObservationIgnored private var pointerAtPeek: CGPoint?
 
     init(model: AppModel, lens: LensController) {
         self.model = model
@@ -103,6 +105,9 @@ final class InletController {
     func set(_ mode: Inlet.Mode, focus: Bool = true) {
         guard inlet.mode != mode else { return }
         inlet.mode = mode
+        // A peek's timer belongs to that peek.
+        settleTask?.cancel()
+        if case .peek = mode { pointerAtPeek = NSEvent.mouseLocation }
         if mode != .open { pinnedOpen = false }
         if mode == .rest { exchangeTarget = nil }
         // Held news is told while you're looking.
@@ -118,10 +123,10 @@ final class InletController {
         watchPointer(mode != .rest)
     }
 
+    /// Clicking somewhere else puts the Inlet away; an unsent draft waits in the composer for next time.
     private func resignedKey() {
         switch inlet.mode {
-        case .job: set(.rest)
-        case .compose where model.draft.isEmpty: set(.rest)
+        case .job, .compose: set(.rest)
         default: break
         }
     }
@@ -166,11 +171,12 @@ final class InletController {
         set(.job(job.id), focus: focus)
     }
 
-    /// Put away what's showing: a job opened from the conversation goes back to it; anything else, to rest.
+    /// Put away what's showing: a job opened from the conversation goes back to it (keeping the keyboard, so
+    /// it doesn't slip away while the pointer is still where the job was); anything else, to rest.
     private func dismiss() {
         if case .job = inlet.mode, backToConversation {
             backToConversation = false
-            set(.open)
+            set(.compose)
         } else {
             set(.rest)
         }
@@ -186,9 +192,14 @@ final class InletController {
         if let latest = fresh.last, inlet.mode == .rest || isPeek {
             set(.peek(latest.id))
         }
-        if case .peek(let id) = inlet.mode, let message = thread.first(where: { $0.id == id }), !message.streaming {
-            settle(after: linger(for: message))
+        guard case .peek(var id) = inlet.mode else { return }
+        // The reply it was showing is gone (what you said never got through): show that instead, with Try again.
+        if !thread.contains(where: { $0.id == id }) {
+            guard let failed = thread.last(where: { if case .failed = $0.delivery { true } else { false } }) else { return set(.rest) }
+            id = failed.id
+            set(.peek(id))
         }
+        if let message = thread.first(where: { $0.id == id }), !message.streaming { settle(id, after: linger(for: message)) }
     }
 
     /// Long enough to read; questions stay a little longer.
@@ -200,12 +211,12 @@ final class InletController {
 
     private var isPeek: Bool { if case .peek = inlet.mode { true } else { false } }
 
-    /// Returns the Inlet to rest after a while, unless you're using it.
-    private func settle(after delay: Duration) {
+    /// Returns the peek of `id` to rest after a while, unless you're using it.
+    private func settle(_ id: String, after delay: Duration) {
         settleTask?.cancel()
         settleTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
-            guard !Task.isCancelled, let self, self.isPeek,
+            guard !Task.isCancelled, let self, case .peek(let showing) = self.inlet.mode, showing == id,
                 !self.inletRect.insetBy(dx: -16, dy: -16).contains(NSEvent.mouseLocation)
             else { return }
             self.set(.rest)
@@ -266,6 +277,16 @@ final class InletController {
     private func intent(at mouse: CGPoint, in rect: CGRect) -> Inlet.Mode? {
         switch inlet.mode {
         case .rest, .peek:
+            // Not mid-drag (a window, a file, a selection carried to the edge), not for a peek that came
+            // out under a pointer that was just resting there, and not a question's peek, whose buttons
+            // would move away as the conversation opened under the pointer (its mark opens it instead).
+            if NSEvent.pressedMouseButtons != 0 { return nil }
+            if case .peek(let id) = inlet.mode {
+                if let at = pointerAtPeek, hypot(mouse.x - at.x, mouse.y - at.y) < 4 { return nil }
+                if let asked = model.thread.first(where: { $0.id == id })?.attentionID, model.attention.contains(where: { $0.id == asked }) {
+                    return nil
+                }
+            }
             // At rest the target is the sliver plus a band along the very edge.
             let slop: CGFloat = inlet.mode == .rest ? 10 : 16
             let hot = rect.insetBy(dx: -slop, dy: -slop).contains(mouse)
@@ -274,7 +295,7 @@ final class InletController {
         case .open:
             return pinnedOpen || rect.insetBy(dx: -16, dy: -16).contains(mouse) ? nil : .rest
         case .compose:
-            let idle = model.draft.isEmpty && panel?.isKeyWindow != true
+            let idle = panel?.isKeyWindow != true
             return idle && !rect.insetBy(dx: -16, dy: -16).contains(mouse) ? .rest : nil
         case .listening, .job:
             return nil
@@ -289,7 +310,7 @@ final class InletController {
         hoverIntent = mode
         guard let mode else { return }
         hoverTask = Task { [weak self] in
-            try? await Task.sleep(for: mode == .open ? .milliseconds(140) : .milliseconds(380))
+            try? await Task.sleep(for: mode == .open ? .milliseconds(200) : .milliseconds(380))
             guard !Task.isCancelled, let self else { return }
             self.hoverIntent = nil
             self.set(mode)

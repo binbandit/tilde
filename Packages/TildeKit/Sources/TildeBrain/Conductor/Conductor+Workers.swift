@@ -12,9 +12,17 @@ extension Conductor {
         guard let spec = job.harness.spec else { throw UnknownHarness(harness: job.harness) }
         // A worktree's commits are written to the repo's own git directory.
         let writable = job.isolation == .worktree ? [(job.repoPath as NSString).appendingPathComponent(".git")] : []
+        // What in that git directory makes git run code is noted now, and put back if a turn changes it.
+        if let git = writable.first { gitGuards[job.id] = GitGuard.snapshot(gitDirectory: git) }
+        let place: Supervision.Place =
+            switch job.isolation {
+            case .worktree: .worktree
+            case .inPlace: .checkout
+            case .scratch: .scratch
+            }
         let worker = spec.make(WorkerLaunch(
             workdir: job.workdir, sessionID: job.sessionID, resume: resume, model: job.model,
-            instructions: Supervision.brief(owner: Owner.firstName), writable: writable))
+            instructions: Supervision.brief(owner: Owner.firstName, place: place), writable: writable))
         workers[job.id] = worker
         Task { [weak self] in
             for await event in worker.events { self?.handle(event, from: job.id) }
@@ -36,7 +44,8 @@ extension Conductor {
             }
         case .message(let text):
             record(jobID, .agent, .message, text)
-            update(jobID) { $0.summary = text }
+            // While it works, its latest words; once tilde signs it off, that sign-off stays.
+            update(jobID) { if !$0.phase.isOpen || $0.phase.isActive { $0.summary = text } }
         case .notice(let text):
             record(jobID, .agent, .event, text)
             update(jobID) { $0.ticker = text }
@@ -48,6 +57,13 @@ extension Conductor {
             Task { await manager.post(.init(Self.describe(request, job: jobID, standing: standing), jobs: [jobID])) }
         case .turnEnded(let ok, let text):
             guard let job = jobs.first(where: { $0.id == jobID }), job.phase.isActive else { return }
+            let tampered = gitGuards[jobID]?.restore(gitDirectory: (job.repoPath as NSString).appendingPathComponent(".git")) ?? []
+            if !tampered.isEmpty {
+                let what = "The agent changed the repo's \(tampered.joined(separator: ", ")), which make git run code; tilde put them back."
+                Log.info("guard", "\(jobID): \(what)")
+                record(jobID, .tilde, .event, what)
+                emit(.said("\(job.title): \(what)", jobID: jobID))
+            }
             Task {
                 var diff: DiffStat?
                 if let base = job.baseCommit { diff = await Git.diffStat(workdir: job.workdir, base: base) }

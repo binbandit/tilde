@@ -212,6 +212,25 @@ extension Conductor {
         saveThread()
     }
 
+    /// A reply tilde was writing when it last stopped can't arrive now. An empty one goes, and what it was
+    /// answering says it never got a reply (with Try again); one already under way stays as far as it got.
+    func settleInterrupted() {
+        for i in thread.indices.reversed() where thread[i].streaming {
+            guard thread[i].text.isEmpty else {
+                thread[i].streaming = false
+                thread[i].activity = nil
+                continue
+            }
+            thread.remove(at: i)
+            if let said = thread[..<i].lastIndex(where: { $0.from == .you }), thread[said].delivery != nil,
+                thread[(said + 1)..<i].allSatisfy({ $0.from == .tilde && $0.text.isEmpty })
+            {
+                thread[said].delivery = .failed("tilde restarted before replying")
+            }
+        }
+        for i in thread.indices where thread[i].delivery == .sent { thread[i].delivery = .failed("tilde restarted before reading it") }
+    }
+
     /// Keeps the thread honest about open questions: the ones still waiting are in it (carried
     /// over from an earlier day if need be), and the ones a restart dropped no longer look open.
     func reconcileQuestions() {

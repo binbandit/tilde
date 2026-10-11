@@ -9,7 +9,10 @@ struct PeekView: View {
     var actions: InletActions
 
     var body: some View {
-        if let index = model.thread.firstIndex(where: { $0.id == messageID }) {
+        if let index = model.thread.firstIndex(where: { $0.id == messageID }), model.thread[index].from == .you {
+            // Something you said that didn't get through, with its way to try again.
+            YourWords(text: model.thread[index].text, at: model.thread[index].at, receipt: model.thread[index])
+        } else if let index = model.thread.firstIndex(where: { $0.id == messageID }) {
             let message = model.thread[index]
             VStack(alignment: .leading, spacing: 6) {
                 // A reply comes with what it's replying to, and, until it starts, whether tilde has it.
@@ -19,6 +22,9 @@ struct PeekView: View {
                 }
                 HStack(alignment: .top, spacing: 8) {
                     TildeMark(mood: mood(message), size: 18).padding(.top, 12)
+                        .contentShape(.rect)
+                        .onTapGesture { actions.compose() }
+                        .help("Open the conversation")
                     // A long reply shows its start; resting the pointer on it opens the whole conversation.
                     let long = message.text.count > 600 || message.text.split(separator: "\n").count > 12
                     TildeWords(message: message, chips: message.jobs, actions: actions)

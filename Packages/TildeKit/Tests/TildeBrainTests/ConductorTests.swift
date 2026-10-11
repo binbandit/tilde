@@ -236,6 +236,24 @@ final class LaunchLog: Sendable {
         #expect(conductor.unallowedRail(deploy, job: job.id) == "Deploys")
     }
 
+    @Test func aReplyARestartCutOffSaysSoInsteadOfTypingForever() async throws {
+        let conductor = try await makeConductor()
+        var said = Message(from: .you, text: "how are my PRs?")
+        said.delivery = .read(.now)
+        conductor.thread = [said, Message(from: .tilde, text: "", streaming: true)]
+        conductor.settleInterrupted()
+        #expect(conductor.thread.map(\.from) == [.you])
+        guard case .failed = conductor.thread[0].delivery else { Issue.record("not marked failed"); return }
+    }
+
+    @Test func aQuestionAskedJustAfterMidnightIsAskedOnce() async throws {
+        let conductor = try await makeConductor()
+        conductor.thread = [Message(from: .you, text: "night", at: .now.addingTimeInterval(-86_400))]
+        conductor.threadDay = .now.addingTimeInterval(-86_400)
+        _ = await call(conductor, "ask", ["question": "Merge app#7?", "options": ["Merge", "Not now"]])
+        #expect(conductor.thread.filter { $0.attentionID != nil }.count == 1)
+    }
+
     @Test func scratchJobsNeedNoRepo() async throws {
         let conductor = try await makeConductor()
         let started = await call(conductor, "delegate", ["title": "Check the app", "brief": "Look at it", "harness": "scripted"])

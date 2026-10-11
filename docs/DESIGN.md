@@ -66,7 +66,7 @@ Coming back after a while away, tilde says what happened meanwhile, if anything 
 Click an agent (its chip in the conversation or its dot) and it opens wide out of the edge:
 
 - **Conversation**: everything between the agent and the people directing it, the same for every harness. The agent speaks on the left; tilde's brief and every follow-up, tilde's or yours, sit in wells on the right. Its steps fold into one line, and what it asked, who answered, and where each turn ended are marked in between.
-- **Changes**: the diff file by file, numbered on both sides, each file's name pinned while you read it. Big and generated files (lockfiles, snapshots) start folded. Clicking a line opens the file there in your editor. Work waiting for review opens here.
+- **Changes**: the diff file by file, numbered on both sides, each file's name pinned while you read it. Big and generated files (lockfiles, snapshots) start folded. Double-clicking a line opens the file there in your editor. Work waiting for review opens here.
 - **Talk to it**: what you type goes straight to the agent (tilde hears it too, and won't contradict you). When it's waiting on you, what you type answers it. A stopped agent picks its session back up. While it works, the button at the end of the field stops it.
 
 Agents and tilde write Markdown, and it reads as written: lists, code, tables. While an agent works, what it's doing now shimmers.

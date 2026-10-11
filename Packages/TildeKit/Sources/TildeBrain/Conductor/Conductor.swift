@@ -67,6 +67,8 @@ public final class Conductor {
     @ObservationIgnored var optionalReplies: Set<String> = []
     /// Turns carrying your answers, whose exchange the scribe has already seen.
     @ObservationIgnored var answerTaps: Set<String> = []
+    /// Each worktree job's repo git config and hooks as they were when its worker started.
+    @ObservationIgnored var gitGuards: [String: GitGuard] = [:]
 
     public struct Config: Sendable {
         public var manager = Manager.Config()
@@ -106,6 +108,7 @@ public final class Conductor {
         restore()
         thread = threads.load()
         earlier = threads.earlier(than: .now, last: Self.earlierShown)
+        settleInterrupted()
         reconcileQuestions()
         // The day's manager thread is kept open, so nobody waits for it to start, even on a new day.
         Task { [manager] in
@@ -145,8 +148,9 @@ public final class Conductor {
 
     /// Puts a question to the owner.
     func raise(_ item: Attention) {
-        attention.append(item)
+        // The message first: if the day has just turned, the new thread mustn't carry this question over too.
         append(Message(from: .tilde, text: item.question, jobs: item.jobID.map { [$0] } ?? [], attentionID: item.id))
+        attention.append(item)
         if let jobID = item.jobID { update(jobID) { $0.phase = .needsYou } }
         signal.yield(.asked(item))
         persist()

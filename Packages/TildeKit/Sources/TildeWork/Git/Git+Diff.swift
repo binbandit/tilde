@@ -2,9 +2,12 @@ import Foundation
 import TildeSupport
 
 extension Git {
+    /// git for reading a worker's worktree: nothing in it (a monitor, a hook) runs on tilde's behalf.
+    static let reading = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]
+
     /// Everything the job changed since `base`: commits plus uncommitted and untracked work.
     public static func diffStat(workdir: String, base: String) async -> DiffStat {
-        let numstat = (try? await Shell.check(["git", "diff", "--numstat", base], cwd: workdir)) ?? ""
+        let numstat = (try? await Shell.check(reading + ["diff", "--numstat", "--no-ext-diff", "--no-textconv", base], cwd: workdir)) ?? ""
         var stat = DiffStat(files: 0, insertions: 0, deletions: 0)
         for line in numstat.split(separator: "\n") {
             let cols = line.split(separator: "\t")
@@ -26,11 +29,11 @@ extension Git {
 
     /// The full patch since `base`, including untracked files, for review.
     public static func diff(workdir: String, base: String) async -> String {
-        var patch = (try? await Shell.run(["git", "diff", "--no-color", base], cwd: workdir).stdout) ?? ""
+        var patch = (try? await Shell.run(reading + ["diff", "--no-color", "--no-ext-diff", "--no-textconv", base], cwd: workdir).stdout) ?? ""
         let untracked = (try? await Shell.check(["git", "ls-files", "--others", "--exclude-standard"], cwd: workdir)) ?? ""
         for file in untracked.split(separator: "\n") {
             let output = try? await Shell.run(
-                ["git", "diff", "--no-color", "--no-index", "/dev/null", String(file)], cwd: workdir)
+                reading + ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-index", "/dev/null", String(file)], cwd: workdir)
             patch += output?.stdout ?? ""
         }
         return patch

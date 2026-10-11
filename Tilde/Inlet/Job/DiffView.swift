@@ -2,7 +2,7 @@ import SwiftUI
 import TildeKit
 
 /// A unified diff, file by file: numbered on both sides, each file's name pinned while
-/// you read it, and big or generated files folded until you open them. Click a line to
+/// you read it, and big or generated files folded until you open them. Double-click a line to
 /// open the file there in your editor.
 struct DiffView: View {
     var patch: String
@@ -184,7 +184,9 @@ private struct FileLines: View {
         .background(hovered == index ? Color.white.opacity(0.07) : tint(line.kind)?.opacity(0.11) ?? .clear)
         .contentShape(.rect)
         .onHover { hovered = $0 ? index : (hovered == index ? nil : hovered) }
-        .onTapGesture { open(file.path, line.newLine) }
+        // A double-click, so a stray click while reading doesn't leave the review for the editor.
+        .onTapGesture(count: 2) { open(file.path, line.newLine) }
+        .help("Double-click to open it here in your editor")
     }
 
     private func sign(_ kind: DiffMap.Line.Kind) -> String {

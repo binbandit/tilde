@@ -39,7 +39,7 @@ struct Composer: View {
                     Button("New message") { newMessage = true }
                         .buttonStyle(.plain)
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.text3)
+                        .foregroundStyle(Theme.text2)
                 }
                 .padding(.top, 3)
                 .padding(.trailing, 5)

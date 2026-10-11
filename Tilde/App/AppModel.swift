@@ -57,12 +57,11 @@ final class AppModel {
     /// What's waiting on you about a job, if anything.
     func question(for jobID: String) -> Attention? { attention.last { $0.jobID == jobID } }
 
-    /// The question tilde most recently asked that's still waiting, while it's the latest thing
-    /// between you: once you've said something since, what you type is a new message.
+    /// The question tilde just asked, while it's the last thing said: anything said since (by either
+    /// of you) means what you type is a new message, and the question keeps its own buttons.
     var openQuestion: Attention? {
-        guard let asked = thread.lastIndex(where: { $0.attentionID != nil }), !thread[asked...].contains(where: { $0.from == .you })
-        else { return nil }
-        return attention.first { $0.id == thread[asked].attentionID }
+        guard let id = thread.last?.attentionID else { return nil }
+        return attention.first { $0.id == id }
     }
 
     // MARK: Talking
