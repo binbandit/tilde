@@ -7,6 +7,9 @@ app=$1
 destination=$2
 fallback=${3:-}
 diagnostics=$(mktemp) || exit 1
+shutdown_state=$(mktemp) || { rm -f -- "$diagnostics"; exit 1; }
+printf '[]' > "$shutdown_state"
+lifecycle="$(dirname -- "${BASH_SOURCE[0]}")/tilde-lifecycle.js"
 stage=
 permission_denied=false
 
@@ -17,7 +20,7 @@ cleanup_stage() {
         rmdir -- "$stage" 2>/dev/null || true
     fi
 }
-trap 'cleanup_stage; rm -f -- "$diagnostics"' EXIT
+trap 'cleanup_stage; rm -f -- "$diagnostics" "$shutdown_state"' EXIT
 
 destination_error() {
     local message
@@ -43,6 +46,11 @@ install_to() {
     fi
     # Copy errors may come from the source, so they never trigger fallback.
     ditto "$app" "$stage/tilde.app" || return 1
+    # The build and staging copy must succeed before touching a running app.
+    if ! osascript -l JavaScript "$lifecycle" stop "$shutdown_state"; then
+        printf 'Could not stop tilde; installation was not replaced\n' >&2
+        return 1
+    fi
     target="$directory/tilde.app"
     previous="$stage/previous.app"
     if [[ -e "$target" || -L "$target" ]]; then
@@ -61,8 +69,23 @@ install_to() {
         fi
         return 1
     fi
+    if ! open -n "$target"; then
+        printf 'Could not launch %s; attempting to restore the previous installation\n' "$target" >&2
+        # A failed launch may still have started a process. Stop verified app
+        # instances again before moving the new bundle out of the way.
+        if ! osascript -l JavaScript "$lifecycle" stop "$shutdown_state"; then
+            printf 'Previous app retained at %s\n' "$previous" >&2
+            return 1
+        fi
+        if [[ -e "$previous" || -L "$previous" ]]; then
+            if ! mv -- "$target" "$stage/tilde.app" || ! mv -- "$previous" "$target"; then
+                printf 'Restore failed; previous app retained at %s\n' "$previous" >&2
+            fi
+        fi
+        return 1
+    fi
     rm -rf -- "$previous" || return 1
-    printf 'Installed tilde to %s\n' "$target"
+    printf 'Installed and launched tilde at %s\n' "$target"
 }
 
 if install_to "$destination"; then
@@ -75,4 +98,5 @@ if [[ -n "$fallback" && "$permission_denied" == true ]]; then
     permission_denied=false
     install_to "$fallback" && exit 0
 fi
+osascript -l JavaScript "$lifecycle" recover "$shutdown_state" || printf 'Could not restart every previous tilde instance\n' >&2
 exit 1
