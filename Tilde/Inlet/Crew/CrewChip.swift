@@ -21,7 +21,6 @@ struct CrewChip: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(hovered ? Color.white.opacity(0.12) : Theme.raised, in: .capsule)
-            .overlay(Capsule().strokeBorder(job.phase == .needsYou ? Theme.amber.opacity(0.5) : .clear, lineWidth: 1))
             .contentShape(.capsule)
         }
         .buttonStyle(.plain)

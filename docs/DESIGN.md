@@ -49,8 +49,8 @@ Motion: the black is drawn from the bezel itself, so it never leaves the screen'
 Every question tilde brings you has:
 
 - one short line,
-- 2 to 4 options, with **tilde's pick in amber**,
-- an "Always" box that turns your answer into a standing rule in `rules.md`,
+- 2 to 4 options, with **tilde's pick in amber**: short ones in a row, longer ones stacked as full-width rows, never wrapped inside a button,
+- for an agent's request, "Always answer this way", which turns your answer into a standing rule in `rules.md`,
 - a free-text field for anything else.
 
 Answers to a worker's question go straight to the worker. The manager is told, and the scribe learns from what you chose.
