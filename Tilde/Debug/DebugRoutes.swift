@@ -2,7 +2,7 @@ import AppKit
 import TildeKit
 
 /// `tilde://debug/<route>` shows the Inlet in any state with fixture data
-/// (fixtures, empty, clear, inlet?mode=&real=1&doing=, listen?text=, job?id=&as=conversation, place?edge=, frame, hide),
+/// (fixtures, empty, clear, inlet?mode=&real=1&said=&doing=, listen?text=, job?id=&as=conversation, place?edge=, frame, hide),
 /// for design work and screenshots without a live agent. Nothing here takes the keyboard.
 @MainActor
 enum DebugRoutes {
@@ -23,12 +23,21 @@ enum DebugRoutes {
             inlet.set(.rest)
             delegate.lens.hide()
         case "/inlet":
-            // &real=1 shows what's really there; &doing=<activity> adds a reply tilde is still working on.
+            // &real=1 shows what's really there. &said=sent|read|failed adds something you just said, in that
+            // state; &doing=<activity> has tilde writing back to it.
             if value("real") != "1" { fixtures() }
+            if let state = value("said") ?? value("doing").map({ _ in "read" }), model.fixture != nil {
+                var said = Message(from: .you, text: "how many PRs do I have open in oh-fx?")
+                said.delivery = switch state {
+                case "sent": .sent
+                case "failed": .failed("Codex isn't running")
+                default: .read(.now)
+                }
+                model.fixture?.thread.append(said)
+            }
             if let doing = value("doing"), model.fixture != nil {
                 var pending = Message(from: .tilde, text: "", streaming: true)
                 pending.activity = doing.isEmpty ? nil : doing
-                model.fixture?.thread.append(Message(from: .you, text: "how many PRs do I have open in oh-fx?"))
                 model.fixture?.thread.append(pending)
             }
             switch value("mode") ?? "open" {
@@ -51,12 +60,15 @@ enum DebugRoutes {
         case "/job":
             // ?id=<job id>, a real one if there is one, or the first ready fixture job.
             if model.job(value("id")) == nil { fixtures() }
-            // &as=conversation shows a real job's conversation, standing in as a fixture without its diff.
+            // &as=conversation shows a job's conversation (a real one standing in as a fixture), without its diff.
             if value("as") == "conversation", model.fixture == nil, var job = model.job(value("id")) {
                 model.loadTranscript(job.id)
                 let transcript = model.transcript(job.id)
                 job.diff = nil
                 model.fixture = AppModel.Fixture(thread: model.thread, jobs: [job], transcripts: [job.id: transcript])
+            }
+            if value("as") == "conversation", let i = model.fixture?.jobs.firstIndex(where: { $0.id == value("id") }) {
+                model.fixture?.jobs[i].diff = nil
             }
             let job = value("id").flatMap { model.job($0) } ?? model.jobs.first { $0.phase == .ready }
             if let job { inlet.openJob(job, focus: false) }

@@ -33,7 +33,7 @@ struct Composer: View {
                 .padding(.trailing, 5)
             }
             HStack(alignment: .bottom, spacing: 10) {
-                TextField("", text: $model.draft, prompt: Text(answering == nil ? "Tell tilde…" : "Your answer…").foregroundStyle(Theme.text3), axis: .vertical)
+                TextField("", text: $model.draft, prompt: Text(answering == nil ? "Message tilde" : "Your answer…").foregroundStyle(Theme.text3), axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(Theme.text)

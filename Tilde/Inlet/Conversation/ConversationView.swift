@@ -35,19 +35,28 @@ struct ConversationView: View {
     /// The conversation hugs its content until it's tall, then scrolls, newest at the bottom.
     private var thread: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 0) {
                 if model.thread.isEmpty, model.listening == nil {
                     Greeting()
                 }
+                let chips = chips
+                let receipts = receipts
                 ForEach(Array(model.thread.enumerated()), id: \.element.id) { index, message in
-                    if let gap = Self.gap(before: index, in: model.thread) {
+                    let gap = Self.gap(before: index, in: model.thread)
+                    if let gap {
                         Text(gap).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.text3)
                             .frame(maxWidth: .infinity)
+                            .padding(.top, index == 0 ? 0 : 18)
+                            .padding(.bottom, 10)
                     }
-                    MessageRow(message: message, chips: chips[message.id] ?? [], actions: actions)
+                    MessageRow(
+                        message: message, chips: chips[message.id] ?? [], actions: actions,
+                        tail: !joins(index + 1, chips: chips, receipts: receipts), receipt: receipts.contains(index))
+                        // A run from one side sits close together; a new speaker gets room.
+                        .padding(.top, gap != nil || index == 0 ? 0 : joins(index, chips: chips, receipts: receipts) ? 3 : 12)
                 }
                 if let listening = model.listening {
-                    ListeningRow(listening: listening, referent: referent)
+                    ListeningRow(listening: listening, referent: referent).padding(.top, model.thread.isEmpty ? 0 : 12)
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { threadHeight = $0.rounded(.up) }
@@ -74,6 +83,33 @@ struct ConversationView: View {
         }
         return Dictionary(grouping: latest.keys, by: { latest[$0]! }).mapValues { ids in
             ids.sorted()
+        }
+    }
+
+    /// Your messages that say whether tilde has them: the last one, until tilde answers, and any that never got through.
+    private var receipts: Set<Int> {
+        let thread = model.thread
+        var shown = Set(thread.indices.filter { if case .failed = thread[$0].delivery { true } else { false } })
+        if let last = thread.lastIndex(where: { $0.from == .you }),
+            thread[(last + 1)...].allSatisfy({ $0.from == .tilde && $0.text.isEmpty })
+        {
+            shown.insert(last)
+        }
+        return shown
+    }
+
+    /// Whether the message at `index` carries on a run from the one before: same side, no time
+    /// between them, and nothing hanging off the earlier one.
+    private func joins(_ index: Int, chips: [String: [String]], receipts: Set<Int>) -> Bool {
+        let thread = model.thread
+        guard index > 0, index < thread.count, Self.gap(before: index, in: thread) == nil else { return false }
+        let previous = thread[index - 1], message = thread[index]
+        guard previous.from == message.from, !(message.streaming && message.text.isEmpty) else { return false }
+        switch previous.from {
+        case .you: return previous.pointing == nil && !receipts.contains(index - 1)
+        case .tilde:
+            return previous.attentionID == nil && previous.settled == nil && previous.noted.isEmpty
+                && (chips[previous.id] ?? []).isEmpty && !(previous.streaming && previous.text.isEmpty)
         }
     }
 

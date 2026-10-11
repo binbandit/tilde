@@ -46,7 +46,7 @@ extension ButtonStyle where Self == OutlineButtonStyle {
     }
 }
 
-/// A small round button at the end of a composer: white to send, quiet to stop.
+/// A small round button at the end of a composer: blue, like what you say, to send; quiet to stop.
 struct ComposerButton: View {
     var icon: String
     var filled: Bool
@@ -57,9 +57,9 @@ struct ComposerButton: View {
         Button(action: action) {
             Image(systemName: icon)
                 .font(.system(size: filled ? 12 : 9, weight: .heavy))
-                .foregroundStyle(filled ? .black : Theme.text)
+                .foregroundStyle(Theme.text)
                 .frame(width: 26, height: 26)
-                .background(filled ? Theme.text : Color.white.opacity(0.14), in: .circle)
+                .background(filled ? Theme.focus : Color.white.opacity(0.14), in: .circle)
                 .contentShape(.circle)
         }
         .buttonStyle(.plain)

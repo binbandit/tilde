@@ -91,7 +91,11 @@ enum Fixtures {
                 e(12, .agent, .step, "Running pnpm test app/pricing"),
                 e(11, .agent, .message, "Team is highlighted now. Tests still pass."),
                 e(11, .agent, .turnEnded, "3 files +48 −19"),
-                e(10, .tilde, .event, "Ready for review: rewrote the pricing tiers' copy and tightened the FAQ."),
+                e(10, .you, .message, "Say \"billed yearly\" under the Team price, not in the FAQ."),
+                e(9, .agent, .step, "Editing app/pricing/page.tsx"),
+                e(8, .agent, .message, "Moved it: \"$12 per seat, billed yearly\" sits under the Team price now."),
+                e(8, .agent, .turnEnded, "3 files +49 −19"),
+                e(7, .tilde, .event, "Ready for review: rewrote the pricing tiers' copy and tightened the FAQ."),
             ],
             "j-q2m7": [
                 e(11, .tilde, .message, "Cover paradise's cart with tests: adding, removing and changing quantities, totals with tax, and checkout handoff. Use the existing Vitest setup."),

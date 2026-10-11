@@ -53,9 +53,12 @@ final class AppModel {
     /// What's waiting on you about a job, if anything.
     func question(for jobID: String) -> Attention? { attention.last { $0.jobID == jobID } }
 
-    /// The question tilde most recently asked that's still waiting.
+    /// The question tilde most recently asked that's still waiting, while it's the latest thing
+    /// between you: once you've said something since, what you type is a new message.
     var openQuestion: Attention? {
-        thread.last { $0.attentionID != nil }.flatMap { message in attention.first { $0.id == message.attentionID } }
+        guard let asked = thread.lastIndex(where: { $0.attentionID != nil }), !thread[asked...].contains(where: { $0.from == .you })
+        else { return nil }
+        return attention.first { $0.id == thread[asked].attentionID }
     }
 
     // MARK: Talking
@@ -64,11 +67,22 @@ final class AppModel {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         if fixture != nil {
-            fixture?.thread.append(Message(from: .you, text: text, pointing: referent?.label))
+            var said = Message(from: .you, text: text, pointing: referent?.label)
+            said.delivery = .read(.now)
+            fixture?.thread.append(said)
             fixture?.thread.append(Message(from: .tilde, text: "", streaming: true))
             return
         }
         conductor?.tap(text, context: referent?.context ?? TapContext())
+    }
+
+    /// Sends again something that never reached tilde.
+    func retry(_ message: Message) {
+        if let i = fixture?.thread.firstIndex(where: { $0.id == message.id }) {
+            fixture?.thread[i].delivery = .read(.now)
+            return
+        }
+        conductor?.retry(message.id)
     }
 
     func answer(_ item: Attention, with reply: String, always: Bool = false) {

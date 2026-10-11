@@ -20,7 +20,9 @@ Three things make it feel native rather than bolted on:
 
 The trigger is configurable (double-tap ⌘ or ⌃, hold right ⌥ or right ⌘, or Fn), because not every keyboard has a right Option key.
 
-What you say never waits behind tilde's own work: it's brought into whatever tilde is in the middle of, and answered first. Questions are answered by tilde itself, in a few seconds (what it knows about your PRs comes along with any question that mentions them); only work goes to agents. While a reply is coming, the line where it will appear says what tilde is doing ("Checking GitHub…").
+It reads like texting someone. tilde writes in grey bubbles on the left, you in blue on the right; a run of messages from one side sits close together, the last with a tail. Under the last thing you said, a receipt says whether tilde has it: Delivered, then Read and when. Anything that never reached tilde's model says Not delivered, with Try again. While tilde writes back, its bubble shows the typing dots, with what it's doing underneath ("Checking GitHub…"). Hover a bubble for its time.
+
+What you say never waits behind tilde's own work: it's brought into whatever tilde is in the middle of, and answered first. Questions are answered by tilde itself, in a few seconds (what it knows about your PRs comes along with any question that mentions them); only work goes to agents. While tilde's question is the last thing said, what you type answers it; once you've said something since, it's a new message.
 
 What gets captured with each request: the frontmost app and window, the document it shows (AXDocument), a terminal's working directory (read from its shell processes), the git repo that contains them, any selected text, and the job whose row you pointed at.
 
@@ -90,7 +92,7 @@ AMOLED: true black (#000) surfaces that melt into the bezel, white type, and col
 | Amber | Needs you, or tilde's recommendation |
 | Green | Ready, passing, added lines |
 | Red | Failed, removed lines, destructive actions |
-| Blue | What you're pointing at |
+| Blue | You: what you say, and what you're pointing at |
 
 Motion is spring-based: the shape morphs, it doesn't fade between screens. Text is pixel-aligned and crisp on Retina and on 1x external displays.
 

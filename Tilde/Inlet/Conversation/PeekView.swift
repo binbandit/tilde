@@ -23,7 +23,7 @@ struct PeekView: View {
                             .foregroundStyle(Theme.text3)
                             .lineLimit(2)
                     }
-                    TildeWords(message: message, chips: message.jobs, actions: actions)
+                    TildeWords(message: message, chips: message.jobs, actions: actions, bubbled: false)
                 }
             }
         }

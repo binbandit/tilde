@@ -3,12 +3,14 @@ import TildeKit
 
 /// tilde's look is AMOLED: true black that melts into the bezel, white type,
 /// and colour only where it carries meaning. Amber means "needs you", green
-/// "ready", red "failed", blue "this is what you're pointing at".
+/// "ready", red "failed", blue "you": your words, and what you're pointing at.
 enum Theme {
     static let ink = Color.black
     /// Rows and wells inside black surfaces.
     static let raised = Color(white: 0.085)
     static let line = Color.white.opacity(0.09)
+    /// tilde's side of the conversation.
+    static let bubble = Color(white: 0.14)
     static let text = Color.white
     static let text2 = Color.white.opacity(0.62)
     static let text3 = Color.white.opacity(0.38)
