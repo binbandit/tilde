@@ -71,12 +71,18 @@ final class MacPerception: Perception {
         else { return }
         let name = app.localizedName ?? "App"
         let window = Pointing.focusedWindow(app.processIdentifier)
-        let title = WorkTitles.keep(window.flatMap { Pointing.string($0, kAXTitleAttribute) }, bundle: app.bundleIdentifier)
-        var path = window.flatMap { Pointing.string($0, kAXDocumentAttribute) }.flatMap(Pointing.path(fromURL:))
-        if path == nil, let bundle = app.bundleIdentifier, Pointing.terminals.contains(bundle) {
-            path = Shells.cwd(forTerminal: app.processIdentifier, title: title)
+        let windowTitle = window.flatMap { Pointing.string($0, kAXTitleAttribute) }
+        let title = WorkTitles.keep(windowTitle, bundle: app.bundleIdentifier)
+        var path: String?
+        // Ambient activity keeps only the app's name outside work. A document's path can
+        // reveal as much as its title, so do not read it unless the same policy allows it.
+        if WorkTitles.allowsContext(windowTitle, bundle: app.bundleIdentifier) {
+            path = window.flatMap { Pointing.string($0, kAXDocumentAttribute) }.flatMap(Pointing.path(fromURL:))
+            if path == nil, let bundle = app.bundleIdentifier, Pointing.terminals.contains(bundle) {
+                path = Shells.cwd(forTerminal: app.processIdentifier, title: title)
+            }
+            path = Repos.root(containing: path) ?? path
         }
-        path = Repos.root(containing: path) ?? path
 
         if var span = current, span.app == name, span.title == title, span.path == path {
             span.end = .now
