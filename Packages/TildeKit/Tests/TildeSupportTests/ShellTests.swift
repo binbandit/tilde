@@ -101,4 +101,45 @@ import Testing
         #expect(elapsed < .seconds(2))
         #expect(output.timedOut)
     }
+
+    @Test(arguments: [false, true])
+    func shutdownInterruptsInputHeldByADetachedHelper(cancel: Bool) async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: "tilde-detached-input-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let script = """
+            import os, time
+            r, w = os.pipe()
+            if os.fork():
+                os.close(w)
+                os.read(r, 1)
+                os._exit(0)
+            os.close(r)
+            os.setsid()
+            with open('pid', 'w') as f: f.write(str(os.getpid()))
+            os.write(w, b'x')
+            os.close(w)
+            time.sleep(10)
+            """
+        let done = Mutex(false)
+        let task = Task {
+            defer { done.withLock { $0 = true } }
+            return try await Shell.run(
+                ["/usr/bin/python3", "-I", "-c", script], cwd: root.path, environment: environment,
+                input: String(repeating: "x", count: 2_000_000), timeout: cancel ? nil : .milliseconds(200))
+        }
+        try await Task.sleep(for: .milliseconds(200))
+        if cancel { task.cancel() }
+        try await Task.sleep(for: .milliseconds(800))
+        #expect(done.withLock { $0 })
+        // Deliberately detached from Shell's group; clean up even on the failing baseline.
+        if let text = try? String(contentsOf: root.appending(path: "pid"), encoding: .utf8), let pid = Int32(text) {
+            kill(pid, SIGKILL)
+        }
+        if cancel {
+            await #expect(throws: CancellationError.self) { try await task.value }
+        } else {
+            #expect(try await task.value.timedOut)
+        }
+    }
 }

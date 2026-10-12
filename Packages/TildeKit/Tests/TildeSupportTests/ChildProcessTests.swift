@@ -71,4 +71,20 @@ import Testing
         if !drained.withLock({ $0 }) { killpg(child.pid, SIGKILL) }
         await drain.value
     }
+
+    @Test func largeConcurrentWritesStayWholeAndExact() async throws {
+        let child = try ChildProcess(.init(
+            executable: "/bin/cat", arguments: [], cwd: "/tmp", environment: ["PATH": "/bin:/usr/bin"]))
+        let first = String(repeating: "a", count: 200_000)
+        let second = String(repeating: "b", count: 200_000)
+        let one = Task.detached { try child.write(Data((first + "\n").utf8)) }
+        let two = Task.detached { try child.write(Data((second + "\n").utf8)) }
+        try await one.value
+        try await two.value
+        child.closeStdin()
+        var lines: [String] = []
+        for await line in child.lines { lines.append(line) }
+        #expect(lines.sorted() == [first, second])
+        #expect(await child.waitForExit() == 0)
+    }
 }
