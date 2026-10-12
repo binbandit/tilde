@@ -8,6 +8,7 @@ let package = Package(
     products: [
         .library(name: "TildeKit", targets: ["TildeKit"]),
         .executable(name: "tilde-smoke", targets: ["TildeSmoke"]),
+        .executable(name: "tilde-agent-hook", targets: ["TildeAgentHook"]),
     ],
     targets: [
         // Foundations with no domain knowledge: processes, JSON, logging, paths.
@@ -44,6 +45,7 @@ let package = Package(
             dependencies: ["TildeBrain", "TildeWork", "TildeMemory", "Harnesses", "WorkerKit", "TildeSupport"]),
 
         .executableTarget(name: "TildeSmoke", dependencies: ["TildeKit"]),
+        .executableTarget(name: "TildeAgentHook", dependencies: ["TildeWork", "TildeSupport"]),
 
         .testTarget(name: "TildeSupportTests", dependencies: ["TildeSupport"]),
         .testTarget(name: "WorkerKitTests", dependencies: ["WorkerKit", "TildeSupport"]),

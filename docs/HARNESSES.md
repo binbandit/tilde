@@ -11,6 +11,8 @@ tilde drives the agent CLIs you already use, unmodified and with your own logins
 
 Everything below was verified against the installed CLIs (Claude Code 2.1.294, Codex 0.160.1) with throwaway repos on 2026-10-08.
 
+For independently started terminal agents, see [opt-in terminal discovery](TERMINAL_AGENTS.md). It uses project-scoped Claude, Codex, and Gemini lifecycle hooks and observes metadata only. This is separate from the worker protocols below; ACP or stream support alone does not imply passive discovery of another terminal's session.
+
 ## Claude Code
 
 `claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages --permission-prompt-tool stdio --permission-mode auto --session-id <uuid>`, plus `--append-system-prompt` with the supervision brief.

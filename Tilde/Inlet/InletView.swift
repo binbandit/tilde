@@ -99,8 +99,6 @@ struct InletView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .measured { inlet.measured[.conversation] = $0 }
                 .transition(appear)
-                // tilde has no menu bar item or Dock icon; the open Inlet is the way in.
-                .contextMenu { SettingsLink { Text("Settings…") } }
         case .job:
             if case .job(let id) = inlet.mode, let job = model.job(id) {
                 JobView(job: job, height: min(860, placement.frame.height * 0.84), onClose: actions.dismiss)
