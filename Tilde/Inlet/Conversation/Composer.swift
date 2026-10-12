@@ -113,6 +113,7 @@ struct Composer: View {
         if let answering {
             actions.unpoint()
             model.answer(answering, with: text)
+            actions.submitted()
         } else {
             actions.send(text)
         }

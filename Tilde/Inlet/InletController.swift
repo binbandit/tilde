@@ -27,6 +27,7 @@ final class InletController {
     @ObservationIgnored private let contextCapture = ContextCapture()
     @ObservationIgnored private var minimization = InletMinimization()
     @ObservationIgnored private var settleTask: Task<Void, Never>?
+    @ObservationIgnored private var settlingID: String?
     @ObservationIgnored private var hoverTask: Task<Void, Never>?
     /// Where resting the pointer is taking the Inlet, once it's rested a moment.
     @ObservationIgnored private var hoverIntent: Inlet.Mode?
@@ -65,7 +66,8 @@ final class InletController {
             },
             dismiss: { [weak self] in self?.dismiss() },
             unpoint: { [weak self] in self?.unpoint() },
-            minimize: { [weak self] in self?.minimize() })
+            minimize: { [weak self] in self?.minimize() },
+            submitted: { [weak self] in self?.afterSending() })
     }
 
     // MARK: Showing
@@ -130,6 +132,7 @@ final class InletController {
         inlet.mode = mode
         // A peek's timer belongs to that peek.
         settleTask?.cancel()
+        settlingID = nil
         if changed, case .peek = mode { pointerAtPeek = NSEvent.mouseLocation }
         if mode != .open { pinnedOpen = false }
         if mode != .compose && mode != .listening { contextCapture.cancel() }
@@ -184,7 +187,7 @@ final class InletController {
     }
 
     func minimize() {
-        minimization.minimize(in: inletRect)
+        minimization.minimize(in: inletRect, messages: notificationStates)
         lens.hide()
         set(.rest)
     }
@@ -226,13 +229,18 @@ final class InletController {
         set(.compose)
     }
 
-    /// Sends what you said; tilde's reply peeks out as it's written.
+    /// Sends what you said, then follows the preference for staying tucked away while tilde writes.
     func send(_ text: String) {
         contextCapture.cancel()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return set(.rest) }
         model.send(text, about: exchangeTarget)
         // "This" belonged to what you just said; the next thing starts fresh.
         exchangeTarget = nil
+        afterSending()
+    }
+
+    private func afterSending() {
+        if inlet.preferences.minimizeAfterSending { return minimize() }
         if let reply = model.thread.last, reply.from == .tilde {
             seen.insert(reply.id)
             set(.peek(reply.id))
@@ -257,17 +265,32 @@ final class InletController {
         }
     }
 
+    var isMinimized: Bool { minimization.isMinimized }
+
+    private var notificationStates: [InletMinimization.MessageState] {
+        model.thread.map { message in
+            let failed: Bool
+            if case .failed = message.delivery { failed = true } else { failed = message.trouble }
+            let attention = message.attentionID.flatMap { id in model.attention.contains { $0.id == id } ? id : nil }
+            return .init(id: message.id, isReply: message.from == .tilde, streaming: message.streaming, failed: failed, attentionID: attention)
+        }
+    }
+
     /// New words from tilde peek out of the edge, unless the conversation is
     /// already open; the peek settles once it's been read.
     private func threadChanged() {
         let thread = model.thread
         let fresh = thread.filter { $0.from == .tilde && !seen.contains($0.id) }
         seen.formUnion(thread.map(\.id))
-        guard !minimization.isMinimized else { return }
-
-        if let latest = fresh.last, inlet.mode == .rest || isPeek {
-            set(.peek(latest.id))
-            peekedFor = thread.firstIndex { $0.id == latest.id }.flatMap { i in i > 0 && thread[i - 1].from == .you ? thread[i - 1].id : nil }
+        let notice: String?
+        if minimization.isMinimized {
+            notice = minimization.latestNotice(in: notificationStates)
+        } else {
+            notice = fresh.last?.id
+        }
+        if let notice, inlet.mode == .rest || isPeek {
+            set(.peek(notice))
+            peekedFor = thread.firstIndex { $0.id == notice }.flatMap { i in i > 0 && thread[i - 1].from == .you ? thread[i - 1].id : nil }
         }
         guard case .peek(var id) = inlet.mode else { return }
         // The reply it was showing is gone. If what it answered never got through, that shows instead, with Try
@@ -297,13 +320,17 @@ final class InletController {
 
     /// Returns the peek of `id` to rest after a while, unless you're using it.
     private func settle(_ id: String, after delay: Duration) {
+        guard settlingID != id else { return }
+        settlingID = id
         settleTask?.cancel()
         settleTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
             // While you're on it, it waits for you to move off (a question's peek, say, doesn't open under you).
             while !Task.isCancelled {
                 guard let self, case .peek(let showing) = self.inlet.mode, showing == id else { return }
-                if !self.inletRect.insetBy(dx: -16, dy: -16).contains(NSEvent.mouseLocation) { return self.set(.rest) }
+                if !InletMinimization.pointerIsReadingPeek(at: NSEvent.mouseLocation, shownAt: self.pointerAtPeek, in: self.inletRect) {
+                    return self.set(.rest)
+                }
                 try? await Task.sleep(for: .seconds(1))
             }
         }

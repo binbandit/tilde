@@ -78,6 +78,9 @@ struct InletGeometryTests {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         check(InletPreferences(defaults: defaults) == InletPreferences(), "New defaults must preserve existing appearance")
+        check(InletPreferences(defaults: defaults).minimizeAfterSending, "Sending must minimize by default")
+        defaults.set(false, forKey: InletPreferences.minimizeAfterSendingKey)
+        check(!InletPreferences(defaults: defaults).minimizeAfterSending, "Watching streaming replies remains configurable")
         defaults.set(true, forKey: InletPreferences.stayWithinNotchKey)
         defaults.set(true, forKey: InletPreferences.hideMarkKey)
         let preferences = InletPreferences(defaults: defaults)

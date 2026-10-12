@@ -36,9 +36,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         trigger.onEvent = { [weak self] in self?.trigger($0) }
         trigger.start()
-        listener.onUpdate = { [weak self] transcript, level in
-            self?.model.listening = AppModel.Listening(transcript: transcript, level: level)
-            self?.loudest = max(self?.loudest ?? 0, level)
+        listener.onUpdate = { [weak self] session, transcript, level in
+            guard let self, self.voiceSession == session else { return }
+            self.model.listening = AppModel.Listening(transcript: transcript, level: level)
+            self.loudest = max(self.loudest, level)
         }
         inlet.show()
 
@@ -55,10 +56,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func trigger(_ event: TriggerKey.Event) {
         switch event {
         case .tap:
+            cancelListening()
             inlet.composeCapturingContext(at: NSEvent.mouseLocation, includeSelection: true)
         case .holdBegan:
             guard Permission.microphone.granted else {
                 // Without the microphone, holding the key opens the composer instead, saying why.
+                cancelListening()
                 model.cantHear = true
                 inlet.composeCapturingContext(at: NSEvent.mouseLocation, includeSelection: true)
                 Task { _ = await Listener.requestAccess() }
@@ -67,9 +70,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.cantHear = false
             beginListening(at: NSEvent.mouseLocation)
         case .holdEnded:
-            Task { await endListening(send: true) }
+            endListening(send: true)
         case .cancelled:
-            Task { await endListening(send: false) }
+            endListening(send: false)
         }
     }
 
@@ -77,8 +80,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// actually tried to say something.
     private var holdBegan = Date.distantPast
     private var loudest = 0.0
+    private var voiceSession: UUID?
+    private var finishingVoiceSession: UUID?
 
     private func beginListening(at point: CGPoint) {
+        if let lensTracking { NSEvent.removeMonitor(lensTracking) }
+        let session = listener.begin()
+        voiceSession = session
+        finishingVoiceSession = nil
         tapPoint = point
         holdBegan = .now
         loudest = 0
@@ -88,7 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         lensTracking = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
             MainActor.assumeIsolated { self?.reaim() }
         }
-        Task { await listener.start() }
+        Task { await listener.start(session) }
     }
 
     private var lastAim = Date.distantPast
@@ -100,16 +109,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         inlet.reaim(at: point)
     }
 
-    private func endListening(send: Bool) async {
-        // Holding the key without the microphone opened the composer; letting go leaves it there.
-        guard model.listening != nil else { return }
+    private func endListening(send: Bool) {
+        // Reserve the ending hold before scheduling any async work. A later release or start
+        // cannot make this task finish whichever session happens to be current when it runs.
+        guard let session = voiceSession, finishingVoiceSession != session else { return }
+        finishingVoiceSession = session
+        listener.stop(session)
         if let lensTracking { NSEvent.removeMonitor(lensTracking) }
         lensTracking = nil
-        let heard = await listener.finish()
-        model.listening = nil
-        // Silence from a short or quiet hold (a modifier held for something else) isn't you trying to talk.
         let tried = Date.now.timeIntervalSince(holdBegan) > 1 && loudest > 0.2
-        inlet.heard(send ? heard : "", cancelled: !send || !tried)
+        Task {
+            let heard = await listener.finish(session)
+            guard voiceSession == session else { return }
+            voiceSession = nil
+            finishingVoiceSession = nil
+            model.listening = nil
+            inlet.heard(send ? heard ?? "" : "", cancelled: !send || !tried)
+        }
+    }
+
+    private func cancelListening() {
+        voiceSession = nil
+        finishingVoiceSession = nil
+        listener.cancel()
+        if let lensTracking { NSEvent.removeMonitor(lensTracking) }
+        lensTracking = nil
+        model.listening = nil
     }
 
     // MARK: tilde:// routes
@@ -119,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let value = { (name: String) in query.first { $0.name == name }?.value }
         switch url.host() {
         case "tap":
+            cancelListening()
             // Anything can open a link, so a link only fills in the words: sending them is yours.
             model.draft = value("text") ?? ""
             inlet.composeCapturingContext()

@@ -153,6 +153,8 @@ struct InletActions {
     var unpoint: () -> Void = {}
     /// Tuck the conversation away while keeping its unsent draft.
     var minimize: () -> Void = {}
+    /// A typed answer was sent directly to the model; apply the same send behavior.
+    var submitted: () -> Void = {}
 }
 
 /// Leaving, content is drawn into the point it collapses to: it shrinks toward it, softens

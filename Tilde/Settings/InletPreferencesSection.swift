@@ -3,8 +3,16 @@ import SwiftUI
 struct InletPreferencesSection: View {
     @AppStorage(InletPreferences.stayWithinNotchKey) private var stayWithinNotch = false
     @AppStorage(InletPreferences.hideMarkKey) private var hideMark = false
+    @AppStorage(InletPreferences.minimizeAfterSendingKey) private var minimizeAfterSending = true
 
     var body: some View {
+        Section {
+            Toggle("Minimize after sending", isOn: $minimizeAfterSending)
+        } footer: {
+            Text("Completed replies, failed deliveries and new questions still peek out. Turn this off to watch replies as they are written.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
         Section {
             Toggle("Stay within the notch when hidden", isOn: $stayWithinNotch)
             Toggle("Hide the ~ indicator when hidden", isOn: $hideMark)

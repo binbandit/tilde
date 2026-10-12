@@ -28,7 +28,7 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         case .resolved(let id): center.removeDeliveredNotifications(withIdentifiers: [id])
         case .said(let text, let jobID): if Self.isAway { say(text, jobID: jobID) }
         // A reply you walked away from waits for you like a text would (not one showing on the Inlet now).
-        case .replied(let text): if Self.isAway, inlet.inlet.mode == .rest { say(text, jobID: nil) }
+        case .replied(let text): if Self.isAway, inlet.inlet.mode == .rest || inlet.isMinimized { say(text, jobID: nil) }
         case .noted, .jobChanged, .trouble: break
         }
     }
