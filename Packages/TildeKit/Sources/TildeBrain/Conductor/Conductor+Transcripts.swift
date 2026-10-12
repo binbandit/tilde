@@ -35,15 +35,16 @@ extension Conductor {
         defer { deliveriesInFlight[jobID] = nil }
         let submission = beginSubmission(jobID)
         do {
+            try await waitForGitSubmission(jobID)
+            guard !Task.isCancelled, expectedSubmissions[jobID] == submission else { throw DeliveryInterrupted() }
             if let worker = workers[jobID] {
                 // The git setup as it stands now is what this turn is held to.
-                if job.isolation == .worktree {
-                    gitGuards[jobID] = await GitGuard.snapshot(gitDirectory: (job.repoPath as NSString).appendingPathComponent(".git"))
-                }
+                let snapshot = await newGitGuard(for: job)
                 let brief = job.isolation == .scratch ? text
                     : try RepositoryInstructions.workerBrief(text, repository: job.repoPath, workdir: job.workdir)
                 guard !Task.isCancelled, expectedSubmissions[jobID] == submission,
                     workers[jobID].map({ $0 === worker }) == true else { throw DeliveryInterrupted() }
+                try installGitGuard(snapshot, for: jobID)
                 update(jobID) {
                     $0.phase = .working
                     $0.ticker = from == .you ? "Working on your message" : "Working on feedback"
@@ -59,7 +60,7 @@ extension Conductor {
         } catch {
             if expectedSubmissions[jobID] == submission {
                 let stopped = await stopWorker(jobID)
-                if workerGenerations[jobID] == stopped {
+                if workerGenerations[jobID] == stopped, gitGuardFailures[jobID] == nil {
                     update(jobID) { $0.phase = .failed; $0.ticker = "Message delivery interrupted" }
                 }
             }
@@ -70,7 +71,7 @@ extension Conductor {
     /// Stops a job's agent where it is. Its work stays, and a message starts it again.
     public func stop(_ jobID: String) async {
         let stopped = await stopWorker(jobID)
-        guard workerGenerations[jobID] == stopped else { return }
+        guard workerGenerations[jobID] == stopped, gitGuardFailures[jobID] == nil else { return }
         dropAttention(for: jobID)
         update(jobID) { $0.phase = .stopped; $0.ticker = "Stopped" }
         record(jobID, .you, .event, "Stopped")

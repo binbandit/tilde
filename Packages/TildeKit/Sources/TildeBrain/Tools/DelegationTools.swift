@@ -140,6 +140,7 @@ extension Conductor {
     private func toolStop(_ args: JSON) async -> ToolResult {
         guard let id = args["job"]?.string, job(id) != nil else { return .error("No such job.") }
         let stopped = await stopWorker(id)
+        if let paths = gitGuardFailures[id] { return .error(GitIntegrityFailure(paths: paths).description) }
         guard workerGenerations[id] == stopped else { return .ok("Newer work has already restarted this job.") }
         update(id) { $0.phase = .stopped; $0.ticker = "Stopped" }
         record(id, .tilde, .event, "Stopped")

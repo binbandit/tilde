@@ -65,7 +65,7 @@ extension Conductor {
 
     private func toolFinish(_ args: JSON) async -> ToolResult {
         guard let id = args["job"]?.string, let job = job(id) else { return .error("No such job.") }
-        guard canFinish(id), let ended = turnEnded[id] else {
+        guard gitGuardFailures[id] == nil, gitCleanups[id] == nil, canFinish(id), let ended = turnEnded[id] else {
             return .error("The job must finish a successful turn with no pending questions before sign-off.")
         }
         let summary = args["summary"]?.string ?? ""
@@ -98,7 +98,8 @@ extension Conductor {
         }
         // Stopping a harness can take seconds. New owner feedback during that wait is new work,
         // and must not be followed by a stale completion announcement or outcome record.
-        guard self.job(id)?.phase == .ready, self.job(id)?.updatedAt == signedOffAt else {
+        guard gitGuardFailures[id] == nil, deliveriesInFlight[id] == nil,
+            self.job(id)?.phase == .ready, self.job(id)?.updatedAt == signedOffAt else {
             return .error("The job received new work while completion was being prepared.")
         }
         guard !Task.isCancelled else {

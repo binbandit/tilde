@@ -7,21 +7,28 @@ import TildeWork
 extension Conductor {
     public func diff(_ jobID: String) async -> String {
         guard let job = jobs.first(where: { $0.id == jobID }), let base = job.baseCommit else { return "" }
+        guard (try? await waitForGitCleanup(jobID)) != nil else { return "" }
         return await Git.diff(workdir: job.workdir, base: base)
     }
 
     /// Brings the job's branch into the checkout.
     public func land(_ jobID: String) async throws {
         guard let job = jobs.first(where: { $0.id == jobID }) else { return }
+        try beginGitReview(jobID)
+        defer { endGitReview(jobID) }
+        try await waitForGitCleanup(jobID)
         guard job.reviewAction == .bringIn, let base = job.baseCommit else {
             throw Git.LandFailure(description: "This job has no verified changes ready to bring in.")
         }
+        let stopped = await stopWorker(jobID)
+        try requireGitIntegrity(jobID)
+        guard workerGenerations[jobID] == stopped, expectedSubmissions[jobID] == nil else { throw DeliveryInterrupted() }
         guard try await !Git.checkedDiffStat(workdir: job.workdir, base: base).isEmpty else {
             update(jobID) { $0.diff = DiffStat(files: 0, insertions: 0, deletions: 0); $0.ticker = "Complete" }
             throw Git.LandFailure(description: "There are no changes to bring in. Mark the job Done instead.")
         }
-        guard !Task.isCancelled, self.job(jobID)?.reviewAction == .bringIn else { return }
-        await stopWorker(jobID)
+        guard !Task.isCancelled, self.job(jobID)?.reviewAction == .bringIn,
+            workerGenerations[jobID] == stopped, expectedSubmissions[jobID] == nil else { return }
         try await Git.land(job)
         await Git.removeWorktree(job, deleteBranch: true)
         update(jobID) { $0.phase = .landed; $0.ticker = "Landed"; $0.acknowledgedAt = nil }
@@ -34,8 +41,11 @@ extension Conductor {
 
     public func discard(_ jobID: String) async {
         guard let job = jobs.first(where: { $0.id == jobID }), job.canDiscard, ownsWorktree(job) else { return }
+        guard (try? beginGitReview(jobID)) != nil else { return }
+        defer { endGitReview(jobID) }
         let stopped = await stopWorker(jobID)
-        guard workerGenerations[jobID] == stopped, ownsWorktree(job) else { return }
+        guard gitGuardFailures[jobID] == nil, workerGenerations[jobID] == stopped,
+            expectedSubmissions[jobID] == nil, ownsWorktree(job) else { return }
         await Git.removeWorktree(job, deleteBranch: true)
         dropAttention(for: jobID)
         update(jobID) { $0.phase = .stopped; $0.ticker = "Discarded"; $0.acknowledgedAt = nil }
@@ -62,6 +72,7 @@ extension Conductor {
     @discardableResult
     public func refreshPullRequest(_ jobID: String) async -> PullRequest? {
         guard let job = jobs.first(where: { $0.id == jobID }) else { return nil }
+        guard (try? await waitForGitCleanup(jobID)) != nil else { return nil }
         let pr = await Git.pullRequest(for: job)
         if pr != job.pullRequest { update(jobID) { $0.pullRequest = pr } }
         return pr
@@ -70,6 +81,10 @@ extension Conductor {
     /// Acknowledges a completed result. A worktree is retained for later inspection or discard.
     public func dismiss(_ jobID: String) async {
         guard let job = job(jobID), job.reviewAction == .acknowledge else { return }
+        guard (try? beginGitReview(jobID)) != nil else { return }
+        defer { endGitReview(jobID) }
+        let stopped = await stopWorker(jobID)
+        guard gitGuardFailures[jobID] == nil, workerGenerations[jobID] == stopped, expectedSubmissions[jobID] == nil else { return }
         if job.isolation == .worktree {
             do {
                 guard let base = job.baseCommit else { return }
@@ -84,9 +99,8 @@ extension Conductor {
                 return
             }
         }
-        guard !Task.isCancelled, self.job(jobID)?.reviewAction == .acknowledge else { return }
-        await stopWorker(jobID)
-        guard self.job(jobID)?.reviewAction == .acknowledge else { return }
+        guard !Task.isCancelled, self.job(jobID)?.reviewAction == .acknowledge,
+            workerGenerations[jobID] == stopped, expectedSubmissions[jobID] == nil else { return }
         dropAttention(for: jobID)
         update(jobID) { $0.phase = .landed; $0.ticker = "Done"; $0.acknowledgedAt = .now }
         log.append(jobID, "\(Owner.firstName) marked it done")
@@ -97,7 +111,10 @@ extension Conductor {
     /// Stops the worker so Brayden can resume its session in a terminal.
     public func takeOver(_ jobID: String) async -> (command: String, cwd: String)? {
         guard let job = jobs.first(where: { $0.id == jobID }), let command = job.takeOverCommand else { return nil }
-        await stopWorker(jobID)
+        guard (try? beginGitReview(jobID)) != nil else { return nil }
+        defer { endGitReview(jobID) }
+        let stopped = await stopWorker(jobID)
+        guard gitGuardFailures[jobID] == nil, workerGenerations[jobID] == stopped, expectedSubmissions[jobID] == nil else { return nil }
         dropAttention(for: jobID)
         update(jobID) { $0.phase = .stopped; $0.ticker = "Taken over" }
         log.append(jobID, "\(Owner.firstName) took over in a terminal")
