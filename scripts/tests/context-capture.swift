@@ -12,7 +12,7 @@ struct ContextCaptureChecks {
 
         capture.start(request(1)) { accepted.append($0?.app) }
         try await waitUntil { fixture.started.contains(1) }
-        precondition(accepted.isEmpty)
+        precondition(accepted == [nil], "A new request must invalidate the prior target immediately")
 
         // The main actor is still available while the first collector is blocked. Queue one
         // request, then supersede it before allowing the reader to make progress.
@@ -21,19 +21,20 @@ struct ContextCaptureChecks {
         capture.start(request(3)) { accepted.append($0?.app) }
         await Task.yield()
         fixture.release.signal()
-        try await waitUntil { accepted.count == 1 }
-        precondition(accepted == ["App 3"], "A superseded result was delivered")
+        try await waitUntil { accepted.count == 4 }
+        precondition(accepted == [nil, nil, nil, "App 3"], "A superseded result was delivered")
         precondition(fixture.started == [1, 3], "A cancelled queued request performed collection")
         precondition(!fixture.ranOnMainThread, "The collector blocked the UI thread")
 
         // Unpoint, send, dismiss, or a replacement exchange can all invalidate a running read.
         capture.start(request(4)) { accepted.append($0?.app) }
+        precondition(accepted.last! == nil, "Sending while a re-aim is pending must not use the previous target")
         try await waitUntil { fixture.started.contains(4) }
         capture.cancel()
         fixture.release.signal()
         capture.start(request(5)) { accepted.append($0?.app) }
-        try await waitUntil { accepted.count == 2 }
-        precondition(accepted == ["App 3", nil], "Cancel restored context, or nil did not complete")
+        try await waitUntil { accepted.count == 7 }
+        precondition(accepted == [nil, nil, nil, "App 3", nil, nil, nil], "Cancel restored context, or nil did not complete")
 
         var missingCompleted = false
         capture.start(nil) { value in

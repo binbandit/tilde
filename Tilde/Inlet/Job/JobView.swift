@@ -30,10 +30,11 @@ struct JobView: View {
     }
 
     var body: some View {
-        ViewThatFits(in: .vertical) {
-            content
-            ScrollView { content.fixedSize(horizontal: false, vertical: true) }
+        ScrollView {
+            content.fixedSize(horizontal: false, vertical: true)
         }
+        .scrollIndicators(.never)
+        .scrollBounceBehavior(.basedOnSize)
         .frame(width: width, height: min(height, bodyHeight + chromeHeight))
         .task(id: job.id) { model.loadTranscript(job.id) }
         .onKeyPress(.escape) {
@@ -58,14 +59,11 @@ struct JobView: View {
             .frame(height: bodyHeight)
             VStack(spacing: 0) {
                 Rectangle().fill(Theme.line).frame(height: 1)
-                if width < 620 {
-                    ScrollView(.horizontal) {
-                        JobFooter(job: job, onClose: onClose).frame(width: 620)
-                    }
-                    .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    JobFooter(job: job, onClose: onClose)
+                ScrollView(.horizontal) {
+                    JobFooter(job: job, onClose: onClose).frame(width: max(width, 620))
                 }
+                .scrollBounceBehavior(.basedOnSize)
+                .fixedSize(horizontal: false, vertical: true)
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chrome(footer: $0) }
         }

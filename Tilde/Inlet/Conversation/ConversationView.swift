@@ -24,10 +24,11 @@ struct ConversationView: View {
     var body: some View {
         // Normally only the transcript scrolls. On a very short display,
         // scroll the whole surface so the composer and every control remain reachable.
-        ViewThatFits(in: .vertical) {
-            conversation
-            ScrollView { conversation.fixedSize(horizontal: false, vertical: true) }
+        ScrollView {
+            conversation.fixedSize(horizontal: false, vertical: true)
         }
+        .scrollIndicators(.never)
+        .scrollBounceBehavior(.basedOnSize)
         .frame(height: min(maxHeight, threadHeight + chromeHeight + 14))
         .confirmationDialog("Clear completed chat messages?", isPresented: $confirmClear, titleVisibility: .visible) {
             Button("Clear chat") { history.clear(allMessages, questions: questions) }

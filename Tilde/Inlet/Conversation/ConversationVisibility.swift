@@ -19,7 +19,13 @@ final class ConversationVisibility {
     /// to answer a question or retry a delivery available after clearing.
     func protectedIDs(in messages: [Message], questions: Set<String>) -> Set<String> {
         var protected = Set<String>()
-        for (index, message) in messages.enumerated() {
+        // Coalesced turns can leave partial replies between several owner
+        // messages. Without the manager's turn mapping, keep every owner message
+        // while a reply streams rather than hide an input it may still answer.
+        if messages.contains(where: \.streaming) {
+            protected.formUnion(messages.filter { $0.from == .you }.map(\.id))
+        }
+        for message in messages {
             let question = message.attentionID.map { questions.contains($0) } ?? false
             let pending: Bool
             switch message.delivery {
@@ -28,11 +34,6 @@ final class ConversationVisibility {
             }
             guard message.streaming || question || pending else { continue }
             protected.insert(message.id)
-            if message.streaming,
-                let owner = messages[..<index].last(where: { $0.from == .you })
-            {
-                protected.insert(owner.id)
-            }
         }
         return protected
     }

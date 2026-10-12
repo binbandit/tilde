@@ -25,18 +25,20 @@ final class ContextCapture {
 
     init(collect: @escaping Collector = Pointing.capture) { reader = Reader(collect: collect) }
 
-    /// Starting again supersedes both an in-flight read and its completion. A nil result still
-    /// completes the active request, so callers can clear their pending state.
-    func start(_ request: Pointing.Request?, completion: @escaping @MainActor (Referent?) -> Void) {
+    /// Invalidate the previous target immediately, before waiting on a new read.
+    /// Otherwise sending while re-aim B is pending could still attach accepted aim A.
+    /// Updates deliver nil first and then the active result, even when that is nil.
+    func start(_ request: Pointing.Request?, update: @escaping @MainActor (Referent?) -> Void) {
         cancel()
-        guard let request else { completion(nil); return }
+        update(nil)
+        guard let request else { return }
         let generation = generation
         let reader = reader
         task = Task { [weak self] in
             let result = await reader.read(request)
             guard !Task.isCancelled, let self, self.generation == generation else { return }
             self.task = nil
-            completion(result)
+            update(result)
         }
     }
 

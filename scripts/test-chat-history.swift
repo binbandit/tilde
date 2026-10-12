@@ -18,13 +18,20 @@ struct ChatHistoryTests {
         var queued = Message(id: "queued", from: .you, text: "Next request")
         queued.delivery = .sent
         let messages = [old, sent, reply, question, failed, queued]
+        var earlierTap = Message(id: "earlier-tap", from: .you, text: "Also handle the first request")
+        earlierTap.delivery = .read(.now)
+        let partial = Message(id: "partial", from: .tilde, text: "Started before the second tap")
+        let batched = [old, earlierTap, partial, sent, reply]
+        history.clear(batched, questions: [])
+        precondition(!history.hidden.contains(earlierTap.id), "Coalesced in-flight input must remain visible, even across a partial reply")
+        history.restore()
         let before = messages
         history.clear(messages, questions: ["a-1"])
         precondition(messages == before, "Clear must not change the conversation or delivery state")
         precondition(history.hidden == ["old"], "Only completed messages can be hidden")
         precondition(!history.canClear(messages, questions: ["a-1"]))
         let reloaded = ConversationVisibility(defaults: defaults)
-        precondition(reloaded.hidden == history.hidden, "Clearing survives relaunch")
+        precondition(reloaded.hidden == history.hidden, "A new history instance reloads cleared IDs")
         reply.streaming = false
         reply.text = "Done"
         let completed = [old, sent, reply, question, failed, queued]
@@ -48,6 +55,6 @@ struct ChatHistoryTests {
         precondition(minimization.isMinimized, "Leaving only rearms hover; late replies stay tucked")
         minimization.open()
         precondition(!minimization.isMinimized && minimization.excludedHoverRect == nil)
-        print("Chat history and minimization regressions passed: clear, restore, relaunch, active replies, questions, queued and failed delivery.")
+        print("Chat history and minimization regressions passed: clear, restore, defaults reload, active replies, questions, queued and failed delivery.")
     }
 }

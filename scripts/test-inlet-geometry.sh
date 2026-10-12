@@ -13,4 +13,5 @@ xcrun swiftc -module-cache-path "$scratch/cache" -swift-version 6 \
     "$repo/Tilde/Inlet/Inlet.swift" \
     "$repo/scripts/test-inlet-geometry.swift" \
     -o "$scratch/test-inlet-geometry"
-"$scratch/test-inlet-geometry"
+mkdir -p "$scratch/preferences"
+CFFIXED_USER_HOME="$scratch/preferences" "$scratch/test-inlet-geometry"

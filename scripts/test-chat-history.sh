@@ -15,4 +15,5 @@ swiftc "${common[@]}" -I "$scratch" -L "$scratch" -lTildeSupport \
 swiftc "${common[@]}" -parse-as-library -default-isolation MainActor \
     -I "$scratch" -L "$scratch" -lTildeKit -lTildeSupport -Xlinker -rpath -Xlinker "$scratch" \
     Tilde/Inlet/Conversation/ConversationVisibility.swift Tilde/Inlet/InletMinimization.swift scripts/test-chat-history.swift -o "$scratch/tests"
-"$scratch/tests"
+mkdir -p "$scratch/preferences"
+CFFIXED_USER_HOME="$scratch/preferences" "$scratch/tests"

@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Explicit minimization stays in force until the user returns to the Inlet.
 /// Moving out of the old expanded surface rearms hover, but never shows a reply.
