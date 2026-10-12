@@ -9,6 +9,10 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     private let model: AppModel
     private let inlet: InletController
     private let center = UNUserNotificationCenter.current()
+    /// Serialize category replacement and publication, including across the center's async reads.
+    private var questionUpdates: Task<Void, Never>?
+    /// Only these question categories are ours to replace or remove; other registrations stay intact.
+    private var managedCategoryIDs: Set<String> = []
 
     init(model: AppModel, inlet: InletController) {
         self.model = model
@@ -17,6 +21,8 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
 
     func start() {
         center.delegate = self
+        // Questions restored with the conversation need their inline actions registered again.
+        enqueueQuestionUpdate { await self.registerQuestions() }
         Task { _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge]) }
     }
 
@@ -25,7 +31,10 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     func handle(_ signal: Conductor.Signal) {
         switch signal {
         case .asked(let item): if Self.isAway { post(item) } else { remindLater(item) }
-        case .resolved(let id): center.removeDeliveredNotifications(withIdentifiers: [id])
+        case .resolved(let id):
+            managedCategoryIDs.insert(Self.categoryID(id))
+            removeQuestionNotifications(id)
+            enqueueQuestionUpdate { await self.registerQuestions() }
         case .said(let text, let jobID): if Self.isAway { say(text, jobID: jobID) }
         // A reply you walked away from waits for you like a text would (not one showing on the Inlet now).
         case .replied(let text): if Self.isAway, inlet.inlet.mode == .rest || inlet.isMinimized { say(text, jobID: nil) }
@@ -52,31 +61,60 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func post(_ item: Attention) {
-        let content = UNMutableNotificationContent()
-        let job = model.job(item.jobID)
-        content.title = item.question
-        content.subtitle = job.map { "\($0.title) · \($0.projectName)" } ?? ""
-        let recommended = item.recommended.flatMap { item.options.indices.contains($0) ? item.options[$0] : nil }
-        content.body = [item.detail, recommended.map { "tilde suggests: \($0)" }].compactMap { $0 }.joined(separator: "\n")
-        content.threadIdentifier = item.jobID ?? "tilde"
-        content.interruptionLevel = item.requestID != nil ? .timeSensitive : .active
-        content.sound = .default
-        content.userInfo = ["attention": item.id]
+        enqueueQuestionUpdate {
+            // Re-read open questions after the async category read. One answered while waiting
+            // must neither replace the remaining questions' actions nor be published afterward.
+            await self.registerQuestions()
+            guard let item = self.model.attention.first(where: { $0.id == item.id }) else { return }
+            let content = UNMutableNotificationContent()
+            let job = self.model.job(item.jobID)
+            content.title = item.question
+            content.subtitle = job.map { "\($0.title) · \($0.projectName)" } ?? ""
+            let recommended = item.recommended.flatMap { item.options.indices.contains($0) ? item.options[$0] : nil }
+            content.body = [item.detail, recommended.map { "tilde suggests: \($0)" }].compactMap { $0 }.joined(separator: "\n")
+            content.threadIdentifier = item.jobID ?? "tilde"
+            content.interruptionLevel = item.requestID != nil ? .timeSensitive : .active
+            content.sound = .default
+            content.userInfo = ["attention": item.id]
+            content.categoryIdentifier = Self.categoryID(item.id)
+            try? await self.center.add(UNNotificationRequest(identifier: item.id, content: content, trigger: nil))
+            // Resolving an in-flight add removes it once the center has finished accepting it.
+            if !self.model.attention.contains(where: { $0.id == item.id }) { self.removeQuestionNotifications(item.id) }
+        }
+    }
 
+    private func enqueueQuestionUpdate(_ update: @escaping @MainActor () async -> Void) {
+        let previous = questionUpdates
+        questionUpdates = Task {
+            await previous?.value
+            await update()
+        }
+    }
+
+    private func registerQuestions() async {
+        let existing = await center.notificationCategories()
+        let questions = Set(model.attention.map(Self.category))
+        managedCategoryIDs.formUnion(questions.map(\.identifier))
+        let otherCategories = existing.filter { !managedCategoryIDs.contains($0.identifier) }
+        center.setNotificationCategories(otherCategories.union(questions))
+    }
+
+    private func removeQuestionNotifications(_ id: String) {
+        center.removePendingNotificationRequests(withIdentifiers: [id])
+        center.removeDeliveredNotifications(withIdentifiers: [id])
+    }
+
+    private static func categoryID(_ attentionID: String) -> String { "ask.\(attentionID)" }
+
+    private static func category(_ item: Attention) -> UNNotificationCategory {
         // Options become buttons (the recommended one first); a text field takes anything else.
+        let recommended = item.recommended.flatMap { item.options.indices.contains($0) ? item.options[$0] : nil }
         var options = item.options
         if let recommended, let i = options.firstIndex(of: recommended) { options.insert(options.remove(at: i), at: 0) }
         let actions: [UNNotificationAction] = options.prefix(3).enumerated().map { index, option in
             UNNotificationAction(identifier: "option.\(index).\(option)", title: index == 0 && recommended != nil ? "\(option) ✓" : option)
         } + [UNTextInputNotificationAction(identifier: "reply", title: "Reply…", textInputButtonTitle: "Send", textInputPlaceholder: "Message tilde")]
-        let category = UNNotificationCategory(identifier: "ask.\(item.id)", actions: actions, intentIdentifiers: [])
-        content.categoryIdentifier = category.identifier
-        Task {
-            // Categories must exist before the notification that uses them.
-            let existing = await center.notificationCategories().filter { !$0.identifier.hasPrefix("ask.") }
-            center.setNotificationCategories(existing.union([category]))
-            try? await center.add(UNNotificationRequest(identifier: item.id, content: content, trigger: nil))
-        }
+        return UNNotificationCategory(identifier: categoryID(item.id), actions: actions, intentIdentifiers: [])
     }
 
     private func say(_ text: String, jobID: String?) {
