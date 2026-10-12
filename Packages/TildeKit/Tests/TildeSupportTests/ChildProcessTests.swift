@@ -1,4 +1,6 @@
+import Darwin
 import Foundation
+import Synchronization
 import Testing
 @testable import TildeSupport
 
@@ -29,5 +31,44 @@ import Testing
             executable: "/bin/sh", arguments: ["-c", "sleep 30 & sleep 30; wait"], cwd: "/tmp", environment: ["PATH": "/bin:/usr/bin"]))
         await child.terminate(grace: .milliseconds(200))
         #expect(await child.waitForExit() != 0)
+    }
+
+    @Test func terminateEscalatesAfterTheLeaderExits() async throws {
+        let child = try ChildProcess(.init(
+            executable: "/bin/sh", arguments: ["-c", "(trap '' TERM; echo ready; while :; do sleep 1; done) & wait"],
+            cwd: "/tmp", environment: ["PATH": "/bin:/usr/bin"]))
+        let drained = Mutex(false)
+        var lines = child.lines.makeAsyncIterator()
+        #expect(await lines.next() == "ready")
+        let drain = Task {
+            while await lines.next() != nil {}
+            drained.withLock { $0 = true }
+        }
+        await child.terminate(grace: .milliseconds(100))
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(drained.withLock { $0 })
+        // Also clean up when exercising the broken implementation.
+        if !drained.withLock({ $0 }) { killpg(child.pid, SIGKILL) }
+        await drain.value
+    }
+
+    @Test func anExitedLeaderDoesNotLeaveItsChildrenRunning() async throws {
+        let child = try ChildProcess(.init(
+            executable: "/bin/sh", arguments: ["-c", "(trap '' TERM; echo ready; while :; do sleep 1; done) & read line; exit 0"],
+            cwd: "/tmp", environment: ["PATH": "/bin:/usr/bin"]))
+        var lines = child.lines.makeAsyncIterator()
+        #expect(await lines.next() == "ready")
+        try child.write(Data("exit\n".utf8))
+        try await Task.sleep(for: .milliseconds(100))
+        let drained = Mutex(false)
+        let drain = Task {
+            while await lines.next() != nil {}
+            drained.withLock { $0 = true }
+        }
+        await child.terminate(grace: .milliseconds(100))
+        try await Task.sleep(for: .milliseconds(250))
+        #expect(drained.withLock { $0 })
+        if !drained.withLock({ $0 }) { killpg(child.pid, SIGKILL) }
+        await drain.value
     }
 }
