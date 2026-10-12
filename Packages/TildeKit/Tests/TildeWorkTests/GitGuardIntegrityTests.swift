@@ -122,6 +122,16 @@ import Testing
         #expect(try f.text(linkedConfig).contains("changed-inert-value"))
     }
 
+    @Test func finalIntegrityCheckDistinguishesGuardedAndOrdinaryChanges() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        let guardState = await GitGuard.snapshot(gitDirectory: f.git.path)
+        try f.write("[core]\n\tfsmonitor = original-value\n[branch \"main\"]\n\tremote = origin\n", to: f.config)
+        #expect(await guardState.restorationFailures(gitDirectory: f.git.path).isEmpty)
+        try f.write("[core]\n\tfsmonitor = changed-inert-value\n", to: f.config)
+        #expect(await guardState.restorationFailures(gitDirectory: f.git.path) == ["config"])
+    }
+
     @Test func unreadableSnapshotCannotBeMistakenForAnEmptySnapshot() async throws {
         let f = try Fixture()
         defer { f.remove() }

@@ -108,7 +108,34 @@ public struct GitGuard: Sendable, Equatable {
                 throw UnsafePath()
             }
         } catch { result.refused.append("hooks") }
+        for path in await restorationFailures(gitDirectory: gitDirectory) where !result.refused.contains(path) {
+            result.refused.append(path)
+        }
+        // A repair is only reported as successful when the observed final state is consistent.
+        if !result.refused.isEmpty { result.restored = [] }
         return result
+    }
+
+    /// Checks the observed result without rejecting unrelated branch or remote configuration changes.
+    /// This detects interference during restoration; it does not lock out every concurrent git writer.
+    func restorationFailures(gitDirectory: String) async -> [String] {
+        guard let root = try? Directory(path: gitDirectory), root.identity == directory else { return ["git directory"] }
+        var failed: [String] = []
+        for name in ["config", "config.worktree"] {
+            do {
+                let keys = try await Self.codeKeys(root.read(name)?.data ?? Data())
+                if keys != (configs[name] ?? [:]) { failed.append(name) }
+            } catch { failed.append(name) }
+        }
+        do {
+            guard root.matches(path: gitDirectory) else { return ["git directory"] }
+            if let current = try root.child("hooks") {
+                guard hookDirectory == nil || hookDirectory == current.identity, try current.files() == hooks else {
+                    throw UnsafePath()
+                }
+            } else if hookDirectory != nil { throw UnsafePath() }
+        } catch { failed.append("hooks") }
+        return failed
     }
 
     private struct UnsafePath: Error {}
