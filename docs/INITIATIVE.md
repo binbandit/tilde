@@ -72,7 +72,7 @@ goals, follow-ups, routines (due) ───────────────�
 - Follow-ups and routines live in `agenda.md` (under `## Follow-ups` and `## Routines`), one bullet each, with a machine-readable time:
   - `- 2026-10-09 17:00 check on the nav bar (j-n8v3)`
   - `- every weekday 09:00 morning brief` (`every day`, `weekday`, `weekend`, or `monday` to `sunday`)
-  - A follow-up is handed over once, even if late, then removed. A routine first seen waits for its next time, and one missed by more than 6 hours (the Mac was asleep) is skipped. A goal comes due once per `check-in`; the manager sets the next one.
+  - A follow-up is handed over once, even if late, and removed only when the manager accepts it. Until then it stays in the agenda; a failed send or a restart leaves it due for retry. A routine first seen waits for its next time, and one missed by more than 6 hours (the Mac was asleep) is skipped. A goal comes due once per `check-in`; the manager sets the next one.
 - The manager gets tools to set, update and close goals, add and remove follow-ups and routines, and read the agenda. When something comes due, tilde posts `<due>` to the manager, which acts.
 
 ## Trust

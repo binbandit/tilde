@@ -53,6 +53,8 @@ public actor Manager: CodexHost {
         /// Paths and jobs the message concerns, to pull the right notes into the briefing.
         public var paths: [String]
         public var jobs: [String]
+        /// Whether Codex accepted this message. Queuing alone is not delivery.
+        var onDelivery: (@Sendable (Bool) async -> Void)?
 
         public init(_ text: String, tap: String? = nil, paths: [String] = [], jobs: [String] = []) {
             self.text = text
@@ -80,6 +82,20 @@ public actor Manager: CodexHost {
     private var inbox: [Message] = []
     /// Taps in the running turn; nil when idle.
     private var turn: [String]?
+    /// Changes before a turn starts any async work, unlike the watchdog generation.
+    private var turnID = UUID()
+    /// A completion can precede its steer receipts. Keep its reply until those receipts settle,
+    /// so accepted messages join that reply without executing their instructions again.
+    private struct SteeredTurn {
+        let initialTaps: [String]
+        let initialSaid: String
+        var messages: [(tap: String, text: String, accepted: Bool?)] = []
+        var reply: String?
+
+        var taps: [String] { initialTaps + messages.filter { $0.accepted == true }.map(\.tap) }
+        var said: String { ([initialSaid] + messages.filter { $0.accepted == true }.map(\.text)).filter { !$0.isEmpty }.joined(separator: "\n") }
+    }
+    private var steeredTurns: [UUID: SteeredTurn] = [:]
     private var streaming = ""
     private var replyText = ""
     /// What Brayden said in the running turn, for the scribe.
@@ -120,20 +136,47 @@ public actor Manager: CodexHost {
     /// Brought into the turn in progress, which answers it; or, if that turn just ended, given one of its own.
     private func steer(_ message: Message) async {
         guard let session, let tap = message.tap else { return requeue(message) }
+        let mine = turnID
         let briefing = await withBriefing(message.text, paths: message.paths, jobs: message.jobs)
+        guard turnID == mine, turn != nil, session === self.session else { return requeue(message) }
+        if steeredTurns[mine] == nil { steeredTurns[mine] = SteeredTurn(initialTaps: turn ?? [], initialSaid: said) }
+        let index = steeredTurns[mine]!.messages.count
+        steeredTurns[mine]!.messages.append((tap, message.text, nil))
         do {
             try await session.steer(briefing.text)
         } catch {
+            settleSteer(turn: mine, index: index, accepted: false)
             return requeue(message)
         }
-        guard turn != nil else { return requeue(message) }
-        received(briefing.repositories)
+        if turnID == mine { received(briefing.repositories) }
         Log.info("manager", "steered in: \(message.text.clipped(to: 200))")
-        turn?.append(tap)
-        emit.yield(.read(taps: turn ?? [tap]))
-        asked += "\n\n" + briefing.text
-        streaming = ""
-        said = [said, message.text].filter { !$0.isEmpty }.joined(separator: "\n")
+        if turnID == mine, turn != nil {
+            asked += "\n\n" + briefing.text
+            streaming = ""
+        }
+        settleSteer(turn: mine, index: index, accepted: true)
+        // Record the tap in its own turn before a durable delivery receipt can suspend us.
+        await message.onDelivery?(true)
+    }
+
+    private func settleSteer(turn mine: UUID, index: Int, accepted: Bool) {
+        guard var steered = steeredTurns[mine] else { return }
+        steered.messages[index].accepted = accepted
+        if accepted {
+            if turnID == mine, turn != nil {
+                turn = steered.taps
+                said = steered.said
+            }
+            emit.yield(.read(taps: steered.taps))
+        }
+        if steered.messages.allSatisfy({ $0.accepted != nil }) {
+            if let reply = steered.reply, !steered.taps.isEmpty {
+                emit.yield(.replyDone(taps: steered.taps, text: reply, said: steered.said))
+            }
+            steeredTurns[mine] = nil
+        } else {
+            steeredTurns[mine] = steered
+        }
     }
 
     private func requeue(_ message: Message) {
@@ -161,33 +204,41 @@ public actor Manager: CodexHost {
         guard turn == nil, !inbox.isEmpty else { return }
         let batch = inbox
         inbox = []
+        let mine = UUID()
+        turnID = mine
         turn = batch.compactMap(\.tap)
         streaming = ""
         replyText = ""
         said = batch.filter { $0.tap != nil }.map(\.text).joined(separator: "\n")
-        Task { await self.send(batch) }
+        Task { await self.send(batch, turn: mine) }
     }
 
-    private func send(_ batch: [Message]) async {
+    private func send(_ batch: [Message], turn mine: UUID) async {
         let text = batch.map(\.text).joined(separator: "\n\n")
-        turnStarted = .now
-        attempts = 0
-        done = []
-        repositoryInstructions = [:]
-        pendingRepositoryInstructions = [:]
-        Log.info("manager", "turn: \(text.clipped(to: 300))")
         do {
+            guard turnID == mine, turn != nil else { throw CancellationError() }
+            turnStarted = .now
+            attempts = 0
+            done = []
+            repositoryInstructions = [:]
+            pendingRepositoryInstructions = [:]
+            Log.info("manager", "turn: \(text.clipped(to: 300))")
             let session = try await ensureSession()
+            guard turnID == mine, turn != nil else { throw CancellationError() }
             let briefing = await withBriefing(text, paths: batch.flatMap(\.paths), jobs: Array(Set(batch.flatMap(\.jobs))))
+            guard turnID == mine, turn != nil else { throw CancellationError() }
             asked = briefing.text
             try await session.send(asked, effort: config.effort)
-            received(briefing.repositories)
+            if turnID == mine { received(briefing.repositories) }
+            for message in batch { await message.onDelivery?(true) }
             emit.yield(.read(taps: batch.compactMap(\.tap)))
+            guard turnID == mine, turn != nil else { return }
             watch()
             await steerWaiting()
         } catch {
+            for message in batch { await message.onDelivery?(false) }
             emit.yield(.undelivered(taps: batch.compactMap(\.tap), reason: "I couldn't reach Codex: \(error)"))
-            endTurn()
+            if turnID == mine { endTurn() }
         }
     }
 
@@ -256,12 +307,14 @@ public actor Manager: CodexHost {
     private func watch() {
         generation += 1
         let mine = generation
+        let watchedTurn = turnID
         Task {
             while true {
                 try? await Task.sleep(for: .seconds(min(5, config.stallAfter / 2)))
-                guard generation == mine, turn != nil, !retrying, let session else { return }
+                guard generation == mine, turnID == watchedTurn, turn != nil, !retrying, let session else { return }
                 if Date.now.timeIntervalSince(turnStarted) > config.turnLimit { return await overran(session, turn: mine) }
                 if let quiet = await session.silence, quiet > config.stallAfter {
+                    guard generation == mine, turnID == watchedTurn, turn != nil, !retrying else { return }
                     return await stalled(session)
                 }
             }
@@ -270,6 +323,7 @@ public actor Manager: CodexHost {
 
     /// A turn that has gone on too long, whatever it's doing, is stopped: nothing waits on it forever.
     private func overran(_ session: CodexSession, turn mine: Int) async {
+        let watchedTurn = turnID
         Log.info("manager", "turn still going after \(Int(config.turnLimit))s; stopping it")
         stopping = true
         // Only someone who asked hears about it; a turn of tilde's own just ends.
@@ -277,12 +331,13 @@ public actor Manager: CodexHost {
         Task {
             try? await Task.sleep(for: .seconds(10))
             // If even stopping it hangs, its process goes, and with it the turn (this one, never the next).
-            if generation == mine, turn != nil, session === self.session { await session.stop() }
+            if generation == mine, turnID == watchedTurn, turn != nil, session === self.session { await session.stop() }
         }
         await session.interrupt()
     }
 
     private func stalled(_ session: CodexSession) async {
+        let mine = turnID
         attempts += 1
         retrying = true
         Log.info("manager", "nothing from the model in \(Int(config.stallAfter))s; asking again (\(attempts))")
@@ -291,7 +346,7 @@ public actor Manager: CodexHost {
         // If Codex can't even stop the turn (or answer being asked to), the same.
         Task {
             try? await Task.sleep(for: .seconds(10))
-            if retrying, session === self.session { await session.stop() }
+            if turnID == mine, retrying, session === self.session { await session.stop() }
         }
         await session.interrupt()
     }
@@ -299,6 +354,7 @@ public actor Manager: CodexHost {
     /// Asks a stalled turn again: the same thread carries on from where it was; a fresh one is
     /// told everything again, and what was already done.
     private func askAgain(sameThread: Bool) async {
+        let mine = turnID
         retrying = false
         guard attempts < Self.maxAttempts else {
             emit.yield(.trouble("The model isn't answering right now. Try again in a minute.", taps: turn ?? []))
@@ -311,10 +367,14 @@ public actor Manager: CodexHost {
             ? "(No answer came back, so this is the same turn again. Carry on from where you were.)"
             : "(The connection dropped and this is a fresh thread; here is the turn again.)\n\n\(asked)\(already)"
         do {
-            try await ensureSession().send(text, effort: config.effort)
+            let session = try await ensureSession()
+            guard turnID == mine, turn != nil else { return }
+            try await session.send(text, effort: config.effort)
+            guard turnID == mine, turn != nil else { return }
             watch()
             await steerWaiting()
         } catch {
+            guard turnID == mine, turn != nil else { return }
             emit.yield(.trouble("I couldn't reach Codex: \(error)", taps: turn ?? []))
             endTurn()
         }
@@ -323,7 +383,11 @@ public actor Manager: CodexHost {
     private func endTurn() {
         guard let taps = turn else { return }
         Log.info("manager", "turn done in \(String(format: "%.1f", Date.now.timeIntervalSince(turnStarted)))s: \(replyText.clipped(to: 200))")
-        if !taps.isEmpty { emit.yield(.replyDone(taps: taps, text: replyText, said: said)) }
+        if steeredTurns[turnID] != nil {
+            steeredTurns[turnID]!.reply = replyText
+        } else if !taps.isEmpty {
+            emit.yield(.replyDone(taps: taps, text: replyText, said: said))
+        }
         said = ""
         stopping = false
         turn = nil
