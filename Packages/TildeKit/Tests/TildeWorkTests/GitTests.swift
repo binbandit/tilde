@@ -88,7 +88,8 @@ import WorkerKit
         #expect(try await Git.head(repo) == checkoutHead)
         #expect(try await Git.head(job.workdir) == workerHead)
         #expect(try String(contentsOfFile: "\(job.workdir)/Result.swift", encoding: .utf8) == "result\n")
-        #expect(try await Git.isDirty(job.workdir))
+        let untracked = try await Shell.check(["git", "ls-files", "--others", "--exclude-standard"], cwd: job.workdir)
+        #expect(untracked.split(separator: "\n").contains("Result.swift"))
     }
 
     @Test func picksAFreeBranchName() async throws {
