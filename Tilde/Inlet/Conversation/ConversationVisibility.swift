@@ -23,7 +23,7 @@ final class ConversationVisibility {
         // messages. Without the manager's turn mapping, keep every owner message
         // while a reply streams rather than hide an input it may still answer.
         if messages.contains(where: \.streaming) {
-            protected.formUnion(messages.filter { $0.from == .you }.map(\.id))
+            protected.formUnion(messages.filter { $0.from == .you && !hidden.contains($0.id) }.map(\.id))
         }
         for message in messages {
             let question = message.attentionID.map { questions.contains($0) } ?? false

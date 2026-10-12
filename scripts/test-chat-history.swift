@@ -25,6 +25,12 @@ struct ChatHistoryTests {
         history.clear(batched, questions: [])
         precondition(!history.hidden.contains(earlierTap.id), "Coalesced in-flight input must remain visible, even across a partial reply")
         history.restore()
+        history.clear([old, earlierTap], questions: [])
+        let nextExchange = [old, earlierTap, sent, reply]
+        let nextProtection = history.protectedIDs(in: nextExchange, questions: [])
+        precondition(!history.visible(nextExchange, protecting: nextProtection).contains(earlierTap),
+            "A new streaming reply must not resurrect previously cleared inputs")
+        history.restore()
         let before = messages
         history.clear(messages, questions: ["a-1"])
         precondition(messages == before, "Clear must not change the conversation or delivery state")
