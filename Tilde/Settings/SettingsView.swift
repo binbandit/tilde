@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage(InletPlacement.displayKey) private var display = ""
     @AppStorage("trigger") private var trigger = "doubleOption"
     @State private var screens = NSScreen.screens
+    @State private var launchAtLogin = LoginItem.makeState()
 
     var body: some View {
         Form {
@@ -31,6 +32,27 @@ struct SettingsView: View {
                 }
             }
             Section {
+                Toggle("Launch at login", isOn: Binding(
+                    get: { launchAtLogin.isRegistered },
+                    set: { enabled in Task { await launchAtLogin.setEnabled(enabled) } }
+                ))
+                .disabled(launchAtLogin.isUpdating)
+                .accessibilityValue(launchAtLogin.status == .requiresApproval ? "Waiting for approval" : (launchAtLogin.isEnabled ? "On" : "Off"))
+                if launchAtLogin.status == .requiresApproval {
+                    Button("Open Login Items Settings…") { LoginItem.openSystemSettings() }
+                }
+                if let error = launchAtLogin.error {
+                    Text("Could not change launch at login: \(error)")
+                        .foregroundStyle(Theme.failed)
+                }
+            } header: {
+                Text("Startup")
+            } footer: {
+                Text(startupDescription)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
                 Picker("Display", selection: connectedDisplay) {
                     Text("Automatic").tag("")
                     ForEach(screens.compactMap(\.uuid), id: \.self) { uuid in
@@ -48,6 +70,7 @@ struct SettingsView: View {
             }
             InletPreferencesSection()
             SourcesSection()
+            TerminalAgentsSection()
             Section {
                 Picker("Talk to tilde", selection: $trigger) {
                     ForEach(Trigger.allCases, id: \.self) { Text(label($0)).tag($0.rawValue) }
@@ -55,17 +78,29 @@ struct SettingsView: View {
             } header: {
                 Text("Talking")
             } footer: {
-                Text("Point at something and \((Trigger(rawValue: trigger) ?? .doubleOption).hint). Rest the pointer on tilde to see everything it's doing, or right-click it for Settings.")
+                Text("Point at something and \((Trigger(rawValue: trigger) ?? .doubleOption).hint). Rest the pointer on tilde to see everything it's doing. Open Settings from the tilde menu in the menu bar.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460)
-        // Tall enough for everything, so nothing hides below a scroll.
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 460, height: 660)
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             screens = NSScreen.screens
+        }
+        .onAppear { launchAtLogin.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            launchAtLogin.refresh()
+        }
+    }
+
+    private var startupDescription: String {
+        switch launchAtLogin.status {
+        case .notRegistered: "Off. tilde starts when you open it."
+        case .enabled: "tilde will open automatically when you log in to this Mac."
+        case .requiresApproval: "Waiting for approval. tilde will not launch at login until you allow it in System Settings. Turn the switch off to cancel."
+        case .notFound: "macOS could not find this app's login item. Open the installed copy of tilde and try again."
+        case .unknown: "macOS could not determine whether tilde can launch at login."
         }
     }
 
