@@ -92,8 +92,18 @@ extension Conductor {
             $0.diff = diff
             $0.ticker = status
         }
+        let signedOffAt = self.job(id)?.updatedAt
         if job.harness.spec?.resumeCommand != nil {
             await stopWorker(id)
+        }
+        // Stopping a harness can take seconds. New owner feedback during that wait is new work,
+        // and must not be followed by a stale completion announcement or outcome record.
+        guard self.job(id)?.phase == .ready, self.job(id)?.updatedAt == signedOffAt else {
+            return .error("The job received new work while completion was being prepared.")
+        }
+        guard !Task.isCancelled else {
+            update(id) { $0.phase = .stopped; $0.ticker = "Completion interrupted" }
+            return .error("Completion was cancelled.")
         }
         log.outcome(id, "\(summary)\n\nChanges: \(diff?.label ?? "not a code job")")
         record(id, .tilde, .event, "\(status): \(summary)")
@@ -106,6 +116,7 @@ extension Conductor {
 
     private func canFinish(_ id: String) -> Bool {
         guard let job = job(id), [.deciding, .needsYou].contains(job.phase), successfulTurns.contains(id),
+            deliveriesInFlight[id, default: 0] == 0,
             let ended = turnEnded[id], (handed[id] ?? .distantPast) <= ended else { return false }
         return !requests.values.contains { $0.job == id } && !attention.contains { $0.jobID == id }
     }

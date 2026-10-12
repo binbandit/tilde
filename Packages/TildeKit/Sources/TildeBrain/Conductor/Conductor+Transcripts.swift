@@ -30,8 +30,12 @@ extension Conductor {
     /// Hands words to a job's agent. One that had stopped picks its session back up.
     func deliver(_ text: String, to jobID: String, from: JobEntry.Speaker) async throws {
         guard let job = job(jobID) else { return }
+        deliveriesInFlight[jobID, default: 0] += 1
+        defer {
+            deliveriesInFlight[jobID, default: 1] -= 1
+            if deliveriesInFlight[jobID] == 0 { deliveriesInFlight[jobID] = nil }
+        }
         successfulTurns.remove(jobID)
-        handed[jobID] = .now
         if let worker = workers[jobID] {
             // The git setup as it stands now (yours to change between turns) is what this turn is held to.
             if job.isolation == .worktree {
@@ -39,10 +43,16 @@ extension Conductor {
             }
             let brief = job.isolation == .scratch ? text
                 : try RepositoryInstructions.workerBrief(text, repository: job.repoPath, workdir: job.workdir)
+            guard workers[jobID].map({ $0 === worker }) == true else { throw DeliveryInterrupted() }
             try await worker.steer(brief)
+            guard workers[jobID].map({ $0 === worker }) == true else { throw DeliveryInterrupted() }
         } else {
             try await spawn(job, brief: text, resume: job.sessionID != nil)
+            guard workers[jobID] != nil else { throw DeliveryInterrupted() }
         }
+        handed[jobID] = .now
+        successfulTurns.remove(jobID)
+        turnEnded.removeValue(forKey: jobID)
         record(jobID, from, .message, text)
         update(jobID) {
             $0.phase = .working
@@ -59,4 +69,8 @@ extension Conductor {
         log.append(jobID, "Stopped by \(Owner.firstName)")
         Task { await manager.post(.init("<worker-stopped job=\"\(jobID)\">\(Owner.firstName) stopped it.</worker-stopped>", jobs: [jobID])) }
     }
+}
+
+private struct DeliveryInterrupted: Error, CustomStringConvertible {
+    var description: String { "The worker stopped or was replaced while receiving this message. Try again." }
 }

@@ -42,6 +42,10 @@ import WorkerKit
         #expect(FileManager.default.fileExists(atPath: job.workdir))
         let restored = try Conductor(home: conductor.home, config: fixture.config)
         #expect(restored.job(job.id)?.ticker == "Done")
+        #expect(restored.job(job.id)?.canDiscard == true)
+        await conductor.discard(job.id)
+        #expect(!FileManager.default.fileExists(atPath: job.workdir))
+        #expect(conductor.job(job.id)?.ticker == "Discarded")
     }
 
     @Test func untrackedAndStagedChangesRequireDeliveryReview() async throws {

@@ -85,6 +85,7 @@ extension Conductor {
             guard let job = jobs.first(where: { $0.id == jobID }), job.phase.isActive else { return }
             automaticApprovalJobs.remove(jobID)
             let ended = Date.now
+            let currentDelivery = deliveriesInFlight[jobID, default: 0] == 0
             turnEnded[jobID] = ended
             successfulTurns.remove(jobID)
             Task {
@@ -98,7 +99,8 @@ extension Conductor {
                 var diff: DiffStat?
                 if let base = job.baseCommit { diff = try? await Git.checkedDiffStat(workdir: job.workdir, base: base) }
                 // Stopped (or taken over) while that was being worked out: it stays that way.
-                guard self.job(jobID)?.phase.isActive == true, turnEnded[jobID] == ended,
+                guard currentDelivery, deliveriesInFlight[jobID, default: 0] == 0,
+                    self.job(jobID)?.phase.isActive == true, turnEnded[jobID] == ended,
                     (handed[jobID] ?? .distantPast) <= ended else { return }
                 if ok { successfulTurns.insert(jobID) }
                 record(jobID, .agent, .turnEnded, ok ? (diff?.label ?? "changes unknown") : "Turn failed")
@@ -172,7 +174,8 @@ extension Conductor {
                 if [.deciding, .needsYou].contains($0.phase) { $0.phase = needsOwner ? .needsYou : hasRequests ? .deciding : .working }
             }
             await worker.resolve(requestID, answer)
-            guard workers[pending.job].map({ $0 === worker }) == true else { return }
+            // Delivery has returned. Keep this decision even if that worker exited or was replaced
+            // during the actor hop; registration is only a guard against dispatching stale answers.
             log.append(pending.job, "\(decider.rawValue) \(decision)")
             record(pending.job, decider, .decision, decision)
         }

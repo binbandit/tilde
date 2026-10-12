@@ -52,7 +52,7 @@ struct JobFooter: View {
     private var hasActions: Bool { hasWorkdir || job.phase == .ready || job.phase == .landed || busy || problem != nil }
 
     @ViewBuilder private var secondary: some View {
-        if hasWorkdir, !job.phase.isActive, job.phase != .landed, job.isolation != .inPlace {
+        if hasWorkdir, job.canDiscard {
             // Nothing brings a discarded branch back, so it takes a second click.
             Button(discarding ? "Delete \(job.branch ?? "the work")?" : "Discard") {
                 guard discarding else {

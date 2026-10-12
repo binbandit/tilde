@@ -64,6 +64,11 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
         return diff.isEmpty ? .acknowledge : .bringIn
     }
 
+    /// Acknowledging a no-change worktree retains it, so explicit cleanup remains available.
+    public var canDiscard: Bool {
+        !phase.isActive && isolation != .inPlace && (phase != .landed || isolation == .worktree)
+    }
+
     public init(
         id: String, title: String, brief: String, projectName: String, repoPath: String, workdir: String,
         harness: Harness, isolation: Isolation

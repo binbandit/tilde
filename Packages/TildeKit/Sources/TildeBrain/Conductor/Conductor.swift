@@ -77,6 +77,8 @@ public final class Conductor {
     var automaticApprovalJobs: Set<String> = []
     /// Successful, current worker turns eligible for the manager to sign off.
     @ObservationIgnored var successfulTurns: Set<String> = []
+    /// A turn that ends while newer words are being handed over cannot sign off those words.
+    @ObservationIgnored var deliveriesInFlight: [String: Int] = [:]
     /// What the watchers last saw of your PRs, kept here so a message can take it along without waiting.
     @ObservationIgnored var watching = ""
 
