@@ -84,6 +84,18 @@ public actor Manager: CodexHost {
     private var turn: [String]?
     /// Changes before a turn starts any async work, unlike the watchdog generation.
     private var turnID = UUID()
+    /// A completion can precede its steer receipts. Keep its reply until those receipts settle,
+    /// so accepted messages join that reply without executing their instructions again.
+    private struct SteeredTurn {
+        let initialTaps: [String]
+        let initialSaid: String
+        var messages: [(tap: String, text: String, accepted: Bool?)] = []
+        var reply: String?
+
+        var taps: [String] { initialTaps + messages.filter { $0.accepted == true }.map(\.tap) }
+        var said: String { ([initialSaid] + messages.filter { $0.accepted == true }.map(\.text)).filter { !$0.isEmpty }.joined(separator: "\n") }
+    }
+    private var steeredTurns: [UUID: SteeredTurn] = [:]
     private var streaming = ""
     private var replyText = ""
     /// What Brayden said in the running turn, for the scribe.
@@ -127,28 +139,44 @@ public actor Manager: CodexHost {
         let mine = turnID
         let briefing = await withBriefing(message.text, paths: message.paths, jobs: message.jobs)
         guard turnID == mine, turn != nil, session === self.session else { return requeue(message) }
+        if steeredTurns[mine] == nil { steeredTurns[mine] = SteeredTurn(initialTaps: turn ?? [], initialSaid: said) }
+        let index = steeredTurns[mine]!.messages.count
+        steeredTurns[mine]!.messages.append((tap, message.text, nil))
         do {
             try await session.steer(briefing.text)
         } catch {
+            settleSteer(turn: mine, index: index, accepted: false)
             return requeue(message)
         }
         if turnID == mine { received(briefing.repositories) }
-        guard turnID == mine, turn != nil else {
-            // Codex accepted it, even if its turn finished before the RPC returned. Preserve the
-            // existing reply retry, but do not acknowledge this message a second time.
-            await message.onDelivery?(true)
-            var retry = message
-            retry.onDelivery = nil
-            return requeue(retry)
-        }
         Log.info("manager", "steered in: \(message.text.clipped(to: 200))")
-        turn?.append(tap)
-        emit.yield(.read(taps: turn ?? [tap]))
-        asked += "\n\n" + briefing.text
-        streaming = ""
-        said = [said, message.text].filter { !$0.isEmpty }.joined(separator: "\n")
+        if turnID == mine, turn != nil {
+            asked += "\n\n" + briefing.text
+            streaming = ""
+        }
+        settleSteer(turn: mine, index: index, accepted: true)
         // Record the tap in its own turn before a durable delivery receipt can suspend us.
         await message.onDelivery?(true)
+    }
+
+    private func settleSteer(turn mine: UUID, index: Int, accepted: Bool) {
+        guard var steered = steeredTurns[mine] else { return }
+        steered.messages[index].accepted = accepted
+        if accepted {
+            if turnID == mine, turn != nil {
+                turn = steered.taps
+                said = steered.said
+            }
+            emit.yield(.read(taps: steered.taps))
+        }
+        if steered.messages.allSatisfy({ $0.accepted != nil }) {
+            if let reply = steered.reply, !steered.taps.isEmpty {
+                emit.yield(.replyDone(taps: steered.taps, text: reply, said: steered.said))
+            }
+            steeredTurns[mine] = nil
+        } else {
+            steeredTurns[mine] = steered
+        }
     }
 
     private func requeue(_ message: Message) {
@@ -355,7 +383,11 @@ public actor Manager: CodexHost {
     private func endTurn() {
         guard let taps = turn else { return }
         Log.info("manager", "turn done in \(String(format: "%.1f", Date.now.timeIntervalSince(turnStarted)))s: \(replyText.clipped(to: 200))")
-        if !taps.isEmpty { emit.yield(.replyDone(taps: taps, text: replyText, said: said)) }
+        if steeredTurns[turnID] != nil {
+            steeredTurns[turnID]!.reply = replyText
+        } else if !taps.isEmpty {
+            emit.yield(.replyDone(taps: taps, text: replyText, said: said))
+        }
         said = ""
         stopping = false
         turn = nil
