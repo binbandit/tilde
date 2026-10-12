@@ -25,6 +25,8 @@ final class Inlet {
 
     var mode: Mode = .rest
     var placement = InletPlacement()
+    var preferences = InletPreferences(defaults: .standard)
+    var history = ConversationVisibility()
     /// Each look's content size, for the looks whose shape hugs it.
     var measured: [Look: CGSize] = [:]
 
@@ -54,6 +56,7 @@ final class Inlet {
 
     /// The shape a look takes, in bezel terms.
     func shape(for look: Look) -> InletShape {
+        let confined = preferences.confinesRestingInlet(edge: placement.edge, notch: placement.notch)
         // A nil dimension hugs the content.
         let (width, height, radius, ear): (CGFloat?, CGFloat?, CGFloat, CGFloat) =
             switch (look, placement.edge, placement.notch) {
@@ -61,8 +64,9 @@ final class Inlet {
             case (.conversation, _, _): (400, nil, 28, 12)
             case (.job, _, _): (820, nil, 28, 12)
             // At rest it is the notch; working, the notch widens just enough for a wing either side.
-            case (.dormant, .top, let notch?): (notch.width, notch.height, 10, 5)
-            case (.compact, .top, let notch?): (notch.width + 2 * Self.wing, notch.height, 12, 7)
+            case (.dormant, .top, let notch?): (notch.width, notch.height, 10, confined ? 0 : 5)
+            case (.compact, .top, let notch?):
+                (notch.width + (confined ? 0 : 2 * Self.wing), notch.height, confined ? 10 : 12, confined ? 0 : 7)
             // Without one it's a lip hanging from the menu bar, never deeper than the bar itself.
             case (.dormant, .top, nil): (46, 5, 2.5, 5)
             case (.compact, .top, nil): (nil, placement.menuBar, placement.menuBar / 2, 8)
@@ -71,7 +75,14 @@ final class Inlet {
             }
         // Until a look has been measured, something plausible to grow toward.
         let size = measured[look] ?? CGSize(width: 120, height: 120)
-        let w = (width ?? size.width).rounded(.up), h = (height ?? size.height).rounded(.up)
+        let maximum: CGSize? = switch look {
+        case .conversation: placement.geometry.conversationSize
+        case .peek: placement.geometry.peekSize
+        case .job: placement.geometry.jobSize
+        case .dormant, .compact: nil
+        }
+        let bounded = placement.geometry.bounded(CGSize(width: width ?? size.width, height: height ?? size.height), ear: ear, maximum: maximum)
+        let w = bounded.width, h = bounded.height
         let (depth, length) = placement.edge == .top ? (h, w) : (w, h)
         return InletShape(edge: placement.edge, depth: depth, length: length, radius: radius, ear: ear)
     }

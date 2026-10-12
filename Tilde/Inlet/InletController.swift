@@ -24,7 +24,10 @@ final class InletController {
     @ObservationIgnored var openSettings: OpenSettingsAction?
 
     @ObservationIgnored private var panel: SurfacePanel?
+    @ObservationIgnored private let contextCapture = ContextCapture()
+    @ObservationIgnored private var minimization = InletMinimization()
     @ObservationIgnored private var settleTask: Task<Void, Never>?
+    @ObservationIgnored private var settlingID: String?
     @ObservationIgnored private var hoverTask: Task<Void, Never>?
     /// Where resting the pointer is taking the Inlet, once it's rested a moment.
     @ObservationIgnored private var hoverIntent: Inlet.Mode?
@@ -54,17 +57,17 @@ final class InletController {
             send: { [weak self] in self?.send($0) },
             openJob: { [weak self] in self?.openJob($0) },
             compose: { [weak self] in
-                guard let self, self.inlet.mode != .compose else { return }
-                // Typing after opening it by hover: which app and window you were in comes along (never what's
-                // selected there, which you didn't point at), shown on a chip you can take off.
-                if self.exchangeTarget == nil {
-                    self.exchangeTarget = Pointing.frontmost()
-                    self.exchangeTarget?.selection = nil
+                guard let self else { return }
+                if self.inlet.mode != .compose, self.exchangeTarget == nil {
+                    self.composeCapturingContext()
+                } else {
+                    self.set(.compose)
                 }
-                self.set(.compose)
             },
             dismiss: { [weak self] in self?.dismiss() },
-            unpoint: { [weak self] in self?.exchangeTarget = nil })
+            unpoint: { [weak self] in self?.unpoint() },
+            minimize: { [weak self] in self?.minimize() },
+            submitted: { [weak self] in self?.afterSending() })
     }
 
     // MARK: Showing
@@ -105,6 +108,7 @@ final class InletController {
         guard let panel,
             let screen = InletPlacement.screen(display: UserDefaults.standard.string(forKey: InletPlacement.displayKey))
         else { return }
+        inlet.preferences = InletPreferences(defaults: .standard)
         let edge = forcedEdge ?? InletPlacement.edge(on: screen)
         let placement = InletPlacement(edge: edge, on: screen, simulatesNotch: simulatesNotch)
         guard placement != inlet.placement || panel.frame != placement.frame else { return }
@@ -115,19 +119,31 @@ final class InletController {
     /// `focus: false` shows a mode that wants the keyboard without taking it (debug routes,
     /// so screenshots never steal what you're typing).
     func set(_ mode: Inlet.Mode, focus: Bool = true) {
-        guard inlet.mode != mode else { return }
+        leaveVoicePresentation(for: mode)
+        // A hover timer from the old surface must never steal focus or reopen
+        // a surface that was just explicitly minimized.
+        hoverTask?.cancel()
+        hoverTask = nil
+        hoverIntent = nil
+        if mode == .open || mode == .compose || mode == .listening {
+            minimization.open()
+        }
+        if case .job = mode { minimization.open() }
+        let changed = inlet.mode != mode
         inlet.mode = mode
         // A peek's timer belongs to that peek.
         settleTask?.cancel()
-        if case .peek = mode { pointerAtPeek = NSEvent.mouseLocation }
+        settlingID = nil
+        if changed, case .peek = mode { pointerAtPeek = NSEvent.mouseLocation }
         if mode != .open { pinnedOpen = false }
+        if mode != .compose && mode != .listening { contextCapture.cancel() }
         if mode == .rest { exchangeTarget = nil }
         // Held news is told while you're looking.
         model.conductor?.looking = inlet.isConversation
         panel?.acceptsKey = inlet.wantsKey && focus
-        if inlet.wantsKey && focus {
+        if inlet.wantsKey && focus, let panel {
             NSApp.activate()
-            panel?.makeKey()
+            panel.makeKey()
         } else if panel?.isKeyWindow == true {
             panel?.resignKey()
             NSApp.hide(nil)
@@ -138,8 +154,80 @@ final class InletController {
     /// Clicking somewhere else puts the Inlet away; an unsent draft waits in the composer for next time.
     private func resignedKey() {
         switch inlet.mode {
-        case .job, .compose: set(.rest)
+        case .job, .compose: minimize()
         default: break
+        }
+    }
+
+    // MARK: Voice ownership
+
+    nonisolated struct ReleasedVoice: Sendable {
+        let id: UUID
+        let target: Referent?
+    }
+
+    @ObservationIgnored private var voiceExchangeID: UUID?
+    @ObservationIgnored private var releasedVoiceID: UUID?
+    @ObservationIgnored private var voiceOwnsPresentation = false
+
+    func ownsVoicePresentation(_ id: UUID) -> Bool {
+        voiceExchangeID == id && voiceOwnsPresentation && inlet.mode == .listening
+    }
+
+    private func beginVoiceExchange(_ id: UUID) {
+        voiceExchangeID = id
+        releasedVoiceID = nil
+        voiceOwnsPresentation = true
+    }
+
+    /// Key release commits the target that was actually shown. Later captures or UI navigation
+    /// cannot retarget these words while speech finalization is still running.
+    func releaseVoice(_ id: UUID) -> ReleasedVoice? {
+        guard voiceExchangeID == id, releasedVoiceID == nil else { return nil }
+        contextCapture.cancel()
+        lens.hide()
+        releasedVoiceID = id
+        return ReleasedVoice(id: id, target: exchangeTarget)
+    }
+
+    func cancelVoiceExchange() {
+        voiceExchangeID = nil
+        releasedVoiceID = nil
+        voiceOwnsPresentation = false
+        model.listening = nil
+        lens.hide()
+    }
+
+    private func leaveVoicePresentation(for mode: Inlet.Mode) {
+        guard mode != .listening, voiceExchangeID != nil else { return }
+        // New input supersedes the request. Navigation only detaches a request already released,
+        // allowing it to send with its frozen target without moving the user's current surface.
+        if mode == .compose || releasedVoiceID == nil { return cancelVoiceExchange() }
+        voiceOwnsPresentation = false
+        model.listening = nil
+        lens.hide()
+    }
+
+    func heard(_ text: String, from request: ReleasedVoice, cancelled: Bool = false) {
+        guard voiceExchangeID == request.id, releasedVoiceID == request.id else { return }
+        let ownsPresentation = ownsVoicePresentation(request.id)
+        voiceExchangeID = nil
+        releasedVoiceID = nil
+        voiceOwnsPresentation = false
+        if ownsPresentation {
+            model.listening = nil
+            lens.hide()
+        }
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            model.send(text, about: request.target)
+            if ownsPresentation {
+                exchangeTarget = nil
+                afterSending()
+            }
+        } else if ownsPresentation {
+            if cancelled { return set(.rest) }
+            model.missedYou = true
+            set(.compose)
         }
     }
 
@@ -147,33 +235,81 @@ final class InletController {
 
     /// A tap of the tilde key: the conversation opens with the composer ready.
     func compose(about referent: Referent?, focus: Bool = true) {
+        cancelVoiceExchange()
+        contextCapture.cancel()
         exchangeTarget = referent
         if let referent { lens.flash(on: referent) }
         set(.compose, focus: focus)
     }
 
+    /// Pin the originating app before activation, focus immediately, then
+    /// resolve optional context off the main actor. Sending never waits for it.
+    func composeCapturingContext(at point: CGPoint? = nil, includeSelection: Bool = false) {
+        let request = ContextCapture.snapshot(at: point, includeSelection: includeSelection)
+        compose(about: nil)
+        contextCapture.start(request) { [weak self] referent in
+            guard let self, self.inlet.mode == .compose else { return }
+            self.exchangeTarget = referent
+            if point != nil, let referent { self.lens.flash(on: referent) }
+        }
+    }
+
+    func unpoint() {
+        if releasedVoiceID != nil { cancelVoiceExchange() }
+        contextCapture.cancel()
+        exchangeTarget = nil
+        lens.hide()
+    }
+
+    func minimize() {
+        minimization.minimize(in: inletRect, messages: notificationStates)
+        lens.hide()
+        set(.rest)
+    }
+
     /// The tilde key is held: your words appear in the conversation as you speak.
-    func listen(about referent: Referent?) {
+    func listen(about referent: Referent?, session: UUID = UUID()) {
+        beginVoiceExchange(session)
+        contextCapture.cancel()
         exchangeTarget = referent
+        if referent == nil { lens.hide() }
         set(.listening)
     }
 
-    /// The key was released: send what was heard. Hearing nothing from a real hold opens the composer to
-    /// type it instead, saying so; a cancelled one just settles back.
-    func heard(_ text: String, cancelled: Bool = false) {
-        lens.hide()
-        guard text.isEmpty else { return send(text) }
-        if cancelled { return set(.rest) }
-        model.missedYou = true
-        set(.compose)
+    func listenCapturingContext(at point: CGPoint, session: UUID) {
+        let request = ContextCapture.snapshot(at: point, includeSelection: true)
+        listen(about: nil, session: session)
+        captureListeningContext(request)
     }
 
-    /// Sends what you said; tilde's reply peeks out as it's written.
+    func reaim(at point: CGPoint) {
+        guard inlet.mode == .listening, releasedVoiceID == nil, voiceExchangeID != nil else { return }
+        captureListeningContext(ContextCapture.snapshot(at: point, includeSelection: true, fallbackToFrontmost: false))
+    }
+
+    private func captureListeningContext(_ request: Pointing.Request?) {
+        guard let session = voiceExchangeID, releasedVoiceID == nil, ownsVoicePresentation(session) else { return }
+        contextCapture.start(request) { [weak self] referent in
+            guard let self, self.ownsVoicePresentation(session), self.releasedVoiceID == nil else { return }
+            self.exchangeTarget = referent
+            if let referent { self.lens.show(on: referent) } else { self.lens.hide() }
+        }
+    }
+
+    /// Sends what you said, then follows the preference for staying tucked away while tilde writes.
     func send(_ text: String) {
+        cancelVoiceExchange()
+        contextCapture.cancel()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return set(.rest) }
         model.send(text, about: exchangeTarget)
         // "This" belonged to what you just said; the next thing starts fresh.
         exchangeTarget = nil
+        afterSending()
+    }
+
+    private func afterSending() {
+        cancelVoiceExchange()
+        if inlet.preferences.minimizeAfterSending { return minimize() }
         if let reply = model.thread.last, reply.from == .tilde {
             seen.insert(reply.id)
             set(.peek(reply.id))
@@ -194,7 +330,18 @@ final class InletController {
             backToConversation = false
             set(.compose)
         } else {
-            set(.rest)
+            minimize()
+        }
+    }
+
+    var isMinimized: Bool { minimization.isMinimized }
+
+    private var notificationStates: [InletMinimization.MessageState] {
+        model.thread.map { message in
+            let failed: Bool
+            if case .failed = message.delivery { failed = true } else { failed = message.trouble }
+            let attention = message.attentionID.flatMap { id in model.attention.contains { $0.id == id } ? id : nil }
+            return .init(id: message.id, isReply: message.from == .tilde, streaming: message.streaming, failed: failed, attentionID: attention)
         }
     }
 
@@ -204,10 +351,15 @@ final class InletController {
         let thread = model.thread
         let fresh = thread.filter { $0.from == .tilde && !seen.contains($0.id) }
         seen.formUnion(thread.map(\.id))
-
-        if let latest = fresh.last, inlet.mode == .rest || isPeek {
-            set(.peek(latest.id))
-            peekedFor = thread.firstIndex { $0.id == latest.id }.flatMap { i in i > 0 && thread[i - 1].from == .you ? thread[i - 1].id : nil }
+        let notice: String?
+        if minimization.isMinimized {
+            notice = minimization.latestNotice(in: notificationStates)
+        } else {
+            notice = fresh.last?.id
+        }
+        if let notice, inlet.mode == .rest || isPeek {
+            set(.peek(notice))
+            peekedFor = thread.firstIndex { $0.id == notice }.flatMap { i in i > 0 && thread[i - 1].from == .you ? thread[i - 1].id : nil }
         }
         guard case .peek(var id) = inlet.mode else { return }
         // The reply it was showing is gone. If what it answered never got through, that shows instead, with Try
@@ -216,7 +368,7 @@ final class InletController {
             let said = peekedFor.flatMap { said in thread.first { $0.id == said } }
             if let said, case .failed = said.delivery {
                 id = said.id
-            } else if let writing = thread.last(where: { $0.from == .tilde && $0.streaming }) {
+            } else if !minimization.isMinimized, let writing = thread.last(where: { $0.from == .tilde && $0.streaming }) {
                 id = writing.id
             } else {
                 return set(.rest)
@@ -237,13 +389,17 @@ final class InletController {
 
     /// Returns the peek of `id` to rest after a while, unless you're using it.
     private func settle(_ id: String, after delay: Duration) {
+        guard settlingID != id else { return }
+        settlingID = id
         settleTask?.cancel()
         settleTask = Task { [weak self] in
             try? await Task.sleep(for: delay)
             // While you're on it, it waits for you to move off (a question's peek, say, doesn't open under you).
             while !Task.isCancelled {
                 guard let self, case .peek(let showing) = self.inlet.mode, showing == id else { return }
-                if !self.inletRect.insetBy(dx: -16, dy: -16).contains(NSEvent.mouseLocation) { return self.set(.rest) }
+                if !InletMinimization.pointerIsReadingPeek(at: NSEvent.mouseLocation, shownAt: self.pointerAtPeek, in: self.inletRect) {
+                    return self.set(.rest)
+                }
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -292,6 +448,7 @@ final class InletController {
     private func pointerMoved() {
         guard let panel else { return }
         let mouse = NSEvent.mouseLocation
+        minimization.pointerMoved(to: mouse)
         let rect = inletRect
         let taking = rect.contains(mouse)
         if panel.ignoresMouseEvents == taking { panel.ignoresMouseEvents = !taking }
@@ -303,6 +460,7 @@ final class InletController {
     private func intent(at mouse: CGPoint, in rect: CGRect) -> Inlet.Mode? {
         switch inlet.mode {
         case .rest, .peek:
+            if minimization.excludedHoverRect != nil { return nil }
             // Not mid-drag (a window, a file, a selection carried to the edge), not for a peek that came
             // out under a pointer that was just resting there, and not a question's peek, whose buttons
             // would move away as the conversation opened under the pointer (its mark opens it instead).

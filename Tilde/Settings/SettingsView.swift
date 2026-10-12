@@ -68,6 +68,7 @@ struct SettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+            InletPreferencesSection()
             SourcesSection()
             TerminalAgentsSection()
             Section {

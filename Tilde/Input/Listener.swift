@@ -4,115 +4,158 @@ import Speech
 /// Live, on-device transcription while the tilde key is held.
 @MainActor
 final class Listener {
-    private var engine: AVAudioEngine?
-    private var analyzer: SpeechAnalyzer?
-    private var input: AsyncStream<AnalyzerInput>.Continuation?
-    private var results: Task<Void, Never>?
-    private var settled = ""
-    private var volatile = ""
-    /// Counts listens. A start still setting up (finding the locale, the speech assets) when its hold
-    /// has already ended sees it's out of date and starts nothing.
-    private var generation = 0
+    /// All mutable recording state belongs to one hold, including work still finishing after release.
+    private final class Session {
+        let id = UUID()
+        var engine: AVAudioEngine?
+        var analyzer: SpeechAnalyzer?
+        var input: AsyncStream<AnalyzerInput>.Continuation?
+        var results: Task<Void, Never>?
+        var settled = ""
+        var volatile = ""
+        var level = 0.0
+        var stopping = false
+        var finalizing = false
 
-    /// Called with the transcript so far and the mic level (0...1).
-    var onUpdate: ((String, Double) -> Void)?
+        var transcript: String { (settled + volatile).trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
 
-    var transcript: String { (settled + volatile).trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var session: Session?
+
+    /// Called with the owning hold, transcript so far, and mic level (0...1).
+    var onUpdate: ((UUID, String, Double) -> Void)?
 
     static func requestAccess() async -> Bool {
         await AVCaptureDevice.requestAccess(for: .audio)
     }
 
-    func start() async {
-        settled = ""
-        volatile = ""
-        generation += 1
-        let mine = generation
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
+    /// Reserve ownership synchronously, before scheduling setup. A queued start from an earlier
+    /// hold can then neither replace this session nor open the microphone after its own release.
+    func begin() -> UUID {
+        cancel()
+        let session = Session()
+        self.session = session
+        return session.id
+    }
+
+    func start(_ id: UUID) async {
+        guard let session, session.id == id, !session.stopping,
+            AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
         do {
             let locale = await SpeechTranscriber.supportedLocale(equivalentTo: .current) ?? Locale(identifier: "en-US")
+            guard owns(session), !session.stopping else { return }
             let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
-            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber])
+            guard owns(session), !session.stopping else { return }
+            if let request {
                 try await request.downloadAndInstall()
+                guard owns(session), !session.stopping else { return }
             }
             let analyzer = SpeechAnalyzer(modules: [transcriber])
-            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]), generation == mine else { return }
+            guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]),
+                owns(session), !session.stopping else { return }
             let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
-            self.analyzer = analyzer
-            input = continuation
+            session.analyzer = analyzer
+            session.input = continuation
 
-            results = Task { [weak self] in
+            let results = Task { [weak self, weak session] in
                 do {
                     for try await result in transcriber.results {
+                        guard !Task.isCancelled, let self, let session, self.owns(session) else { return }
                         let text = String(result.text.characters)
-                        guard let self else { return }
                         if result.isFinal {
-                            self.settled += text
-                            self.volatile = ""
+                            session.settled += text
+                            session.volatile = ""
                         } else {
-                            self.volatile = text
+                            session.volatile = text
                         }
-                        self.onUpdate?(self.transcript, self.level)
+                        self.onUpdate?(session.id, session.transcript, session.level)
                     }
                 } catch {}
             }
+            session.results = results
 
             try await analyzer.start(inputSequence: stream)
-            // The hold may have ended while the analyzer started: then the microphone never opens.
-            guard generation == mine else {
+            guard owns(session), !session.stopping else {
                 continuation.finish()
-                results?.cancel()
+                results.cancel()
                 return
             }
-            try startAudio(into: continuation, format: format)
+            try startAudio(for: session, into: continuation, format: format)
         } catch {
-            stopAudio()
+            // A failed setup owns only its own audio, even if a newer hold started while awaiting it.
+            stopAudio(for: session)
         }
     }
 
-    /// Stops listening and returns everything heard.
-    func finish() async -> String {
-        generation += 1
-        stopAudio()
-        input?.finish()
-        try? await analyzer?.finalizeAndFinishThroughEndOfInput()
-        // Give the last result a moment to land.
-        try? await Task.sleep(for: .milliseconds(120))
-        results?.cancel()
-        analyzer = nil
-        input = nil
-        return transcript
+    /// Close audio and invalidate pending setup immediately when the key is released.
+    func stop(_ id: UUID) {
+        guard let session, session.id == id else { return }
+        session.stopping = true
+        stopAudio(for: session)
+        session.input?.finish()
     }
+
+    /// Finalize only this hold. Superseded holds return nil and cannot submit another hold's words.
+    func finish(_ id: UUID) async -> String? {
+        guard let session, session.id == id, !session.finalizing else { return nil }
+        stop(id)
+        session.finalizing = true
+        try? await session.analyzer?.finalizeAndFinishThroughEndOfInput()
+        guard owns(session) else { return nil }
+        // Give this hold's last result a moment to land.
+        try? await Task.sleep(for: .milliseconds(120))
+        guard owns(session) else { return nil }
+        session.results?.cancel()
+        session.analyzer = nil
+        session.input = nil
+        self.session = nil
+        return session.transcript
+    }
+
+    func cancel() {
+        guard let session else { return }
+        self.session = nil
+        session.stopping = true
+        stopAudio(for: session)
+        session.input?.finish()
+        session.results?.cancel()
+        if let analyzer = session.analyzer, !session.finalizing {
+            Task { await analyzer.cancelAndFinishNow() }
+        }
+        session.analyzer = nil
+        session.input = nil
+    }
+
+    private func owns(_ session: Session) -> Bool { self.session === session }
 
     // MARK: Audio
 
-    private var level = 0.0
-
-    private func startAudio(into continuation: AsyncStream<AnalyzerInput>.Continuation, format: AVAudioFormat) throws {
+    private func startAudio(for session: Session, into continuation: AsyncStream<AnalyzerInput>.Continuation, format: AVAudioFormat) throws {
         let engine = AVAudioEngine()
         let node = engine.inputNode
         let micFormat = node.outputFormat(forBus: 0)
         let converter = AVAudioConverter(from: micFormat, to: format)
-        try node.tap(bufferSize: AVAudioFrameCount(micFormat.sampleRate / 10), format: micFormat) { [weak self] buffer, _ in
+        try node.tap(bufferSize: AVAudioFrameCount(micFormat.sampleRate / 10), format: micFormat) { [weak self, weak session] buffer, _ in
             let rms = Listener.rms(buffer)
             Task { @MainActor in
-                guard let self else { return }
-                self.level = self.level * 0.6 + rms * 0.4
-                self.onUpdate?(self.transcript, self.level)
+                guard let self, let session, self.owns(session), !session.stopping else { return }
+                session.level = session.level * 0.6 + rms * 0.4
+                self.onUpdate?(session.id, session.transcript, session.level)
             }
             guard let converter, let converted = Listener.convert(buffer, with: converter, to: format) else { return }
             continuation.yield(AnalyzerInput(buffer: converted))
         }
         engine.prepare()
         try engine.start()
-        self.engine = engine
+        session.engine = engine
     }
 
-    private func stopAudio() {
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
-        level = 0
+    private func stopAudio(for session: Session) {
+        session.engine?.inputNode.removeTap(onBus: 0)
+        session.engine?.stop()
+        session.engine = nil
+        session.level = 0
     }
 
     nonisolated private static func convert(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter, to format: AVAudioFormat) -> AVAudioPCMBuffer? {
