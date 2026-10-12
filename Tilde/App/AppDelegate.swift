@@ -37,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         trigger.onEvent = { [weak self] in self?.trigger($0) }
         trigger.start()
         listener.onUpdate = { [weak self] session, transcript, level in
-            guard let self, self.voiceSession == session else { return }
+            guard let self, self.voiceSession == session, self.inlet.ownsVoicePresentation(session) else { return }
             self.model.listening = AppModel.Listening(transcript: transcript, level: level)
             self.loudest = max(self.loudest, level)
         }
@@ -92,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         holdBegan = .now
         loudest = 0
         model.listening = AppModel.Listening()
-        inlet.listenCapturingContext(at: point)
+        inlet.listenCapturingContext(at: point, session: session)
         // Re-aim the Lens as the pointer moves while you talk.
         lensTracking = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
             MainActor.assumeIsolated { self?.reaim() }
@@ -115,6 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let session = voiceSession, finishingVoiceSession != session else { return }
         finishingVoiceSession = session
         listener.stop(session)
+        let request = inlet.releaseVoice(session)
         if let lensTracking { NSEvent.removeMonitor(lensTracking) }
         lensTracking = nil
         let tried = Date.now.timeIntervalSince(holdBegan) > 1 && loudest > 0.2
@@ -123,8 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard voiceSession == session else { return }
             voiceSession = nil
             finishingVoiceSession = nil
-            model.listening = nil
-            inlet.heard(send ? heard ?? "" : "", cancelled: !send || !tried)
+            if let request { inlet.heard(send ? heard ?? "" : "", from: request, cancelled: !send || !tried) }
         }
     }
 
@@ -132,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         voiceSession = nil
         finishingVoiceSession = nil
         listener.cancel()
+        inlet.cancelVoiceExchange()
         if let lensTracking { NSEvent.removeMonitor(lensTracking) }
         lensTracking = nil
         model.listening = nil

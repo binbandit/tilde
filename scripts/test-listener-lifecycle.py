@@ -19,6 +19,20 @@ app = source('Tilde/App/AppDelegate.swift')
 delegate = app[app.index('    /// When the current hold began'):app.index('    // MARK: tilde:// routes')]
 update = app[app.index('        listener.onUpdate ='):app.index('        inlet.show()')]
 modern = 'private final class Session' in listener
+controller = source('Tilde/Inlet/InletController.swift')
+handoff = '// MARK: Voice ownership' in controller
+
+def method(text, signature):
+    start = text.index(signature)
+    opening = text.index('{', start)
+    depth = 1
+    end = opening + 1
+    while depth:
+        if text[end] == '{': depth += 1
+        elif text[end] == '}': depth -= 1
+        end += 1
+    return text[start:end] + '\n'
+
 
 prefix = r'''import Foundation
 import CoreGraphics
@@ -104,18 +118,96 @@ delegate_prefix = r'''
 @MainActor final class AppModel {
     struct Listening { var transcript = ""; var level = 0.0 }
     var listening: Listening?
+    var missedYou = false
+    var draft = ""
+    struct Message { enum Sender { case tilde }; var id: String; var from: Sender }
+    var thread: [Message] = []
+    var delivered: [(String, Int)] = []
+    func send(_ text: String, about target: Int?) { delivered.append((text, target ?? 0)) }
+}
+typealias Referent = Int
+@MainActor final class Inlet {
+    enum Mode: Equatable { case rest, open, compose, listening, job(String), peek(String) }
+    struct Preferences { var minimizeAfterSending = true }
+    var preferences = Preferences()
+    var mode = Mode.rest
+}
+@MainActor final class LensFixture {
+    var visible = false
+    func hide() { visible = false }
+    func flash(on: Int) { visible = true }
+    func show(on: Int) { visible = true }
+}
+@MainActor enum Pointing { struct Request {} }
+@MainActor final class ContextCapture {
+    var cancellations = 0
+    var starts = 0
+    var completion: ((Referent?) -> Void)?
+    static func snapshot(at: CGPoint, includeSelection: Bool, fallbackToFrontmost: Bool) -> Pointing.Request? { Pointing.Request() }
+    func start(_ request: Pointing.Request?, completion: @escaping (Referent?) -> Void) {
+        starts += 1
+        self.completion = completion
+    }
+    func cancel() { cancellations += 1; completion = nil }
 }
 @MainActor final class InletFixture {
-    var target = 0
-    var delivered: [(String, Int)] = []
-    func listenCapturingContext(at: CGPoint) { target += 1 }
+    let model: AppModel
+    let inlet = Inlet()
+    let lens = LensFixture()
+    let contextCapture = ContextCapture()
+    var exchangeTarget: Referent?
+    private var nextTarget = 0
+    private var seen: Set<String> = []
+    var target: Int { get { exchangeTarget ?? 0 } set { exchangeTarget = newValue } }
+    var delivered: [(String, Int)] { model.delivered }
+    init(model: AppModel) { self.model = model }
+    func minimizeFixture() { set(.rest) }
+    func jobFixture() { set(.job("fixture")) }
+    func minimize() { set(.rest) }
+    func submittedFixture() { afterSending() }
+'''
+if '    private func afterSending()' in controller:
+    delegate_prefix += method(controller, '    private func afterSending()')
+else:
+    # Earlier overlap baselines predate the shared submission helper.
+    delegate_prefix += '    private func afterSending() { set(.rest) }\n'
+if handoff:
+    voice = controller[controller.index('    // MARK: Voice ownership'):controller.index('    // MARK: Talking')]
+    delegate_prefix += voice.replace('@ObservationIgnored ', '')
+    for signature in ['    func compose(about ', '    func listen(about ', '    func send(_ text:', '    func unpoint()', '    func reaim(at ', '    private func captureListeningContext(']:
+        delegate_prefix += method(controller, signature)
+    delegate_prefix += r'''
+    func set(_ mode: Inlet.Mode, focus: Bool = true) {
+        leaveVoicePresentation(for: mode)
+        inlet.mode = mode
+        if mode == .rest { exchangeTarget = nil }
+    }
+    func listenCapturingContext(at: CGPoint, session: UUID) {
+        nextTarget += 1
+        listen(about: nextTarget, session: session)
+    }
+'''
+else:
+    delegate_prefix += r'''
     func reaim(at: CGPoint) {}
-    func heard(_ text: String, cancelled: Bool) { if !text.isEmpty && !cancelled { delivered.append((text, target)) } }
+    func set(_ mode: Inlet.Mode, focus: Bool = true) {
+        inlet.mode = mode
+        if mode == .rest { exchangeTarget = nil }
+    }
+    func compose(about target: Int?, focus: Bool = true) { exchangeTarget = target; set(.compose) }
+    func listenCapturingContext(at: CGPoint) { nextTarget += 1; exchangeTarget = nextTarget; set(.listening) }
+    func send(_ text: String) { model.send(text, about: exchangeTarget); afterSending() }
+    func unpoint() { exchangeTarget = nil }
+    func heard(_ text: String, cancelled: Bool) {
+        if !text.isEmpty && !cancelled { model.send(text, about: exchangeTarget); afterSending() }
+    }
+'''
+delegate_prefix += r'''
 }
 @MainActor final class DelegateFixture {
     let listener = Listener()
     let model = AppModel()
-    let inlet = InletFixture()
+    lazy var inlet = InletFixture(model: model)
     private var lensTracking: Any?
     private var tapPoint = CGPoint.zero
     init() {
@@ -237,6 +329,71 @@ struct Failure: Error, CustomStringConvertible { let description: String }
         try check(cancelled.model.listening == nil && cancelled.inlet.delivered.isEmpty && !cancelled.listener.auditLive,
             "Cancelled voice restored its UI or submitted late words")
 
+        // UI navigation during finalization must never retarget speech or move the new surface.
+        // New input cancels it; a released request may finish after navigation with its frozen target.
+        for destination in ["minimize", "job", "compose", "composeAfterMinimize", "send", "submitted", "unpoint"] {
+            let changing = DelegateFixture()
+            changing.beginFixture()
+            try await wait { changing.listener.auditLive }
+            changing.triedFixture()
+            words("released request")
+            try await wait { changing.listener.auditText == "released request" }
+            let changingAnalyzer = SpeechAnalyzer.latest!
+            changing.inlet.reaim(at: .zero)
+            let lateCapture = changing.inlet.contextCapture.completion
+            let beforeRelease = changing.inlet.contextCapture.cancellations
+            changing.endFixture()
+            try await wait { changingAnalyzer.gate != nil }
+            let frozeCapture = changing.inlet.contextCapture.cancellations > beforeRelease
+            let captureStarts = changing.inlet.contextCapture.starts
+            changing.inlet.reaim(at: .zero)
+            lateCapture?(999)
+            try check(changing.inlet.contextCapture.starts == captureStarts && changing.inlet.target == 1 && !changing.inlet.lens.visible,
+                "Queued re-aim or a late context result revived capture after release")
+            switch destination {
+            case "minimize":
+                changing.inlet.minimizeFixture()
+                changing.inlet.set(.open)
+                changing.inlet.target = 41
+            case "job":
+                changing.inlet.jobFixture()
+                changing.inlet.target = 42
+            case "compose": changing.inlet.compose(about: 77)
+            case "composeAfterMinimize":
+                changing.inlet.minimizeFixture()
+                changing.inlet.set(.open)
+                changing.inlet.compose(about: 78)
+            case "send": changing.inlet.send("typed request")
+            case "submitted": changing.inlet.submittedFixture()
+            default: changing.inlet.unpoint()
+            }
+            changing.model.draft = "new draft"
+            let mode = changing.inlet.inlet.mode
+            let target = changing.inlet.target
+            changingAnalyzer.gate!.resume()
+            try await Task.sleep(for: .milliseconds(180))
+            if destination == "minimize" || destination == "job" {
+                try check(changing.inlet.delivered.count == 1 && changing.inlet.delivered[0].1 == 1,
+                    "RED: released voice lost its frozen target after \(destination)")
+            } else if destination == "send" {
+                try check(changing.inlet.delivered.count == 1 && changing.inlet.delivered[0].0 == "typed request",
+                    "Released voice submitted after newer typed input")
+            } else {
+                try check(changing.inlet.delivered.isEmpty, "Released voice submitted after newer \(destination) input")
+            }
+            try check(changing.inlet.inlet.mode == mode && changing.inlet.target == target && changing.model.draft == "new draft",
+                "Voice completion moved or cleared the newer UI after \(destination)")
+            try check(frozeCapture, "Key release did not cancel its pending context capture")
+        }
+
+        let lensCleanup = DelegateFixture()
+        lensCleanup.inlet.lens.visible = true
+        lensCleanup.inlet.compose(about: nil)
+        try check(!lensCleanup.inlet.lens.visible, "Nil-context compose left an old Lens visible")
+        lensCleanup.inlet.lens.visible = true
+        lensCleanup.cancelFixture()
+        try check(!lensCleanup.inlet.lens.visible, "Voice cancellation left an old Lens visible")
+
         let rapid = DelegateFixture()
         let priorTranscriber = SpeechTranscriber.latest
         rapid.beginFixture()
@@ -244,7 +401,7 @@ struct Failure: Error, CustomStringConvertible { let description: String }
         try await Task.sleep(for: .milliseconds(180))
         try check(SpeechTranscriber.latest === priorTranscriber, "A queued delegate start outlived release")
         try check(rapid.model.listening == nil && rapid.inlet.delivered.isEmpty, "Quick release left listening or submitted words")
-        print("Listener lifecycle checks passed: overlapping finish, stale setup success/failure, early release, delegate ownership, cancellation, single submission")
+        print("Listener lifecycle checks passed: overlapping finish, stale setup success/failure, early release, delegate ownership, cancellation, single submission, frozen handoff, UI ownership, lens cleanup")
     }
     @MainActor static func main() async {
         do { try await run() }

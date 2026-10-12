@@ -119,6 +119,7 @@ final class InletController {
     /// `focus: false` shows a mode that wants the keyboard without taking it (debug routes,
     /// so screenshots never steal what you're typing).
     func set(_ mode: Inlet.Mode, focus: Bool = true) {
+        leaveVoicePresentation(for: mode)
         // A hover timer from the old surface must never steal focus or reopen
         // a surface that was just explicitly minimized.
         hoverTask?.cancel()
@@ -158,10 +159,83 @@ final class InletController {
         }
     }
 
+    // MARK: Voice ownership
+
+    nonisolated struct ReleasedVoice: Sendable {
+        let id: UUID
+        let target: Referent?
+    }
+
+    @ObservationIgnored private var voiceExchangeID: UUID?
+    @ObservationIgnored private var releasedVoiceID: UUID?
+    @ObservationIgnored private var voiceOwnsPresentation = false
+
+    func ownsVoicePresentation(_ id: UUID) -> Bool {
+        voiceExchangeID == id && voiceOwnsPresentation && inlet.mode == .listening
+    }
+
+    private func beginVoiceExchange(_ id: UUID) {
+        voiceExchangeID = id
+        releasedVoiceID = nil
+        voiceOwnsPresentation = true
+    }
+
+    /// Key release commits the target that was actually shown. Later captures or UI navigation
+    /// cannot retarget these words while speech finalization is still running.
+    func releaseVoice(_ id: UUID) -> ReleasedVoice? {
+        guard voiceExchangeID == id, releasedVoiceID == nil else { return nil }
+        contextCapture.cancel()
+        lens.hide()
+        releasedVoiceID = id
+        return ReleasedVoice(id: id, target: exchangeTarget)
+    }
+
+    func cancelVoiceExchange() {
+        voiceExchangeID = nil
+        releasedVoiceID = nil
+        voiceOwnsPresentation = false
+        model.listening = nil
+        lens.hide()
+    }
+
+    private func leaveVoicePresentation(for mode: Inlet.Mode) {
+        guard mode != .listening, voiceExchangeID != nil else { return }
+        // New input supersedes the request. Navigation only detaches a request already released,
+        // allowing it to send with its frozen target without moving the user's current surface.
+        if mode == .compose || releasedVoiceID == nil { return cancelVoiceExchange() }
+        voiceOwnsPresentation = false
+        model.listening = nil
+        lens.hide()
+    }
+
+    func heard(_ text: String, from request: ReleasedVoice, cancelled: Bool = false) {
+        guard voiceExchangeID == request.id, releasedVoiceID == request.id else { return }
+        let ownsPresentation = ownsVoicePresentation(request.id)
+        voiceExchangeID = nil
+        releasedVoiceID = nil
+        voiceOwnsPresentation = false
+        if ownsPresentation {
+            model.listening = nil
+            lens.hide()
+        }
+        if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            model.send(text, about: request.target)
+            if ownsPresentation {
+                exchangeTarget = nil
+                afterSending()
+            }
+        } else if ownsPresentation {
+            if cancelled { return set(.rest) }
+            model.missedYou = true
+            set(.compose)
+        }
+    }
+
     // MARK: Talking
 
     /// A tap of the tilde key: the conversation opens with the composer ready.
     func compose(about referent: Referent?, focus: Bool = true) {
+        cancelVoiceExchange()
         contextCapture.cancel()
         exchangeTarget = referent
         if let referent { lens.flash(on: referent) }
@@ -181,6 +255,7 @@ final class InletController {
     }
 
     func unpoint() {
+        if releasedVoiceID != nil { cancelVoiceExchange() }
         contextCapture.cancel()
         exchangeTarget = nil
         lens.hide()
@@ -193,44 +268,37 @@ final class InletController {
     }
 
     /// The tilde key is held: your words appear in the conversation as you speak.
-    func listen(about referent: Referent?) {
+    func listen(about referent: Referent?, session: UUID = UUID()) {
+        beginVoiceExchange(session)
         contextCapture.cancel()
         exchangeTarget = referent
+        if referent == nil { lens.hide() }
         set(.listening)
     }
 
-    func listenCapturingContext(at point: CGPoint) {
+    func listenCapturingContext(at point: CGPoint, session: UUID) {
         let request = ContextCapture.snapshot(at: point, includeSelection: true)
-        listen(about: nil)
+        listen(about: nil, session: session)
         captureListeningContext(request)
     }
 
     func reaim(at point: CGPoint) {
-        guard inlet.mode == .listening else { return }
+        guard inlet.mode == .listening, releasedVoiceID == nil, voiceExchangeID != nil else { return }
         captureListeningContext(ContextCapture.snapshot(at: point, includeSelection: true, fallbackToFrontmost: false))
     }
 
     private func captureListeningContext(_ request: Pointing.Request?) {
+        guard let session = voiceExchangeID, releasedVoiceID == nil, ownsVoicePresentation(session) else { return }
         contextCapture.start(request) { [weak self] referent in
-            guard let self, self.inlet.mode == .listening else { return }
+            guard let self, self.ownsVoicePresentation(session), self.releasedVoiceID == nil else { return }
             self.exchangeTarget = referent
             if let referent { self.lens.show(on: referent) } else { self.lens.hide() }
         }
     }
 
-    /// The key was released: send what was heard. Hearing nothing from a real hold opens the composer to
-    /// type it instead, saying so; a cancelled one just settles back.
-    func heard(_ text: String, cancelled: Bool = false) {
-        contextCapture.cancel()
-        lens.hide()
-        guard text.isEmpty else { return send(text) }
-        if cancelled { return set(.rest) }
-        model.missedYou = true
-        set(.compose)
-    }
-
     /// Sends what you said, then follows the preference for staying tucked away while tilde writes.
     func send(_ text: String) {
+        cancelVoiceExchange()
         contextCapture.cancel()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return set(.rest) }
         model.send(text, about: exchangeTarget)
@@ -240,6 +308,7 @@ final class InletController {
     }
 
     private func afterSending() {
+        cancelVoiceExchange()
         if inlet.preferences.minimizeAfterSending { return minimize() }
         if let reply = model.thread.last, reply.from == .tilde {
             seen.insert(reply.id)
@@ -299,7 +368,7 @@ final class InletController {
             let said = peekedFor.flatMap { said in thread.first { $0.id == said } }
             if let said, case .failed = said.delivery {
                 id = said.id
-            } else if let writing = thread.last(where: { $0.from == .tilde && $0.streaming }) {
+            } else if !minimization.isMinimized, let writing = thread.last(where: { $0.from == .tilde && $0.streaming }) {
                 id = writing.id
             } else {
                 return set(.rest)
