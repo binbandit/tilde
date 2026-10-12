@@ -24,6 +24,8 @@ final class InletController {
     @ObservationIgnored var openSettings: OpenSettingsAction?
 
     @ObservationIgnored private var panel: SurfacePanel?
+    @ObservationIgnored private let contextCapture = ContextCapture()
+    @ObservationIgnored private var minimization = InletMinimization()
     @ObservationIgnored private var settleTask: Task<Void, Never>?
     @ObservationIgnored private var hoverTask: Task<Void, Never>?
     /// Where resting the pointer is taking the Inlet, once it's rested a moment.
@@ -54,17 +56,16 @@ final class InletController {
             send: { [weak self] in self?.send($0) },
             openJob: { [weak self] in self?.openJob($0) },
             compose: { [weak self] in
-                guard let self, self.inlet.mode != .compose else { return }
-                // Typing after opening it by hover: which app and window you were in comes along (never what's
-                // selected there, which you didn't point at), shown on a chip you can take off.
-                if self.exchangeTarget == nil {
-                    self.exchangeTarget = Pointing.frontmost()
-                    self.exchangeTarget?.selection = nil
+                guard let self else { return }
+                if self.inlet.mode != .compose, self.exchangeTarget == nil {
+                    self.composeCapturingContext()
+                } else {
+                    self.set(.compose)
                 }
-                self.set(.compose)
             },
             dismiss: { [weak self] in self?.dismiss() },
-            unpoint: { [weak self] in self?.exchangeTarget = nil })
+            unpoint: { [weak self] in self?.unpoint() },
+            minimize: { [weak self] in self?.minimize() })
     }
 
     // MARK: Showing
@@ -105,6 +106,7 @@ final class InletController {
         guard let panel,
             let screen = InletPlacement.screen(display: UserDefaults.standard.string(forKey: InletPlacement.displayKey))
         else { return }
+        inlet.preferences = InletPreferences(defaults: .standard)
         let edge = forcedEdge ?? InletPlacement.edge(on: screen)
         let placement = InletPlacement(edge: edge, on: screen, simulatesNotch: simulatesNotch)
         guard placement != inlet.placement || panel.frame != placement.frame else { return }
@@ -115,19 +117,29 @@ final class InletController {
     /// `focus: false` shows a mode that wants the keyboard without taking it (debug routes,
     /// so screenshots never steal what you're typing).
     func set(_ mode: Inlet.Mode, focus: Bool = true) {
-        guard inlet.mode != mode else { return }
+        // A hover timer from the old surface must never steal focus or reopen
+        // a surface that was just explicitly minimized.
+        hoverTask?.cancel()
+        hoverTask = nil
+        hoverIntent = nil
+        if mode == .open || mode == .compose || mode == .listening {
+            minimization.open()
+        }
+        if case .job = mode { minimization.open() }
+        let changed = inlet.mode != mode
         inlet.mode = mode
         // A peek's timer belongs to that peek.
         settleTask?.cancel()
-        if case .peek = mode { pointerAtPeek = NSEvent.mouseLocation }
+        if changed, case .peek = mode { pointerAtPeek = NSEvent.mouseLocation }
         if mode != .open { pinnedOpen = false }
+        if mode != .compose && mode != .listening { contextCapture.cancel() }
         if mode == .rest { exchangeTarget = nil }
         // Held news is told while you're looking.
         model.conductor?.looking = inlet.isConversation
         panel?.acceptsKey = inlet.wantsKey && focus
-        if inlet.wantsKey && focus {
+        if inlet.wantsKey && focus, let panel {
             NSApp.activate()
-            panel?.makeKey()
+            panel.makeKey()
         } else if panel?.isKeyWindow == true {
             panel?.resignKey()
             NSApp.hide(nil)
@@ -138,7 +150,7 @@ final class InletController {
     /// Clicking somewhere else puts the Inlet away; an unsent draft waits in the composer for next time.
     private func resignedKey() {
         switch inlet.mode {
-        case .job, .compose: set(.rest)
+        case .job, .compose: minimize()
         default: break
         }
     }
@@ -147,20 +159,66 @@ final class InletController {
 
     /// A tap of the tilde key: the conversation opens with the composer ready.
     func compose(about referent: Referent?, focus: Bool = true) {
+        contextCapture.cancel()
         exchangeTarget = referent
         if let referent { lens.flash(on: referent) }
         set(.compose, focus: focus)
     }
 
+    /// Pin the originating app before activation, focus immediately, then
+    /// resolve optional context off the main actor. Sending never waits for it.
+    func composeCapturingContext(at point: CGPoint? = nil, includeSelection: Bool = false) {
+        let request = ContextCapture.snapshot(at: point, includeSelection: includeSelection)
+        compose(about: nil)
+        contextCapture.start(request) { [weak self] referent in
+            guard let self, self.inlet.mode == .compose else { return }
+            self.exchangeTarget = referent
+            if point != nil, let referent { self.lens.flash(on: referent) }
+        }
+    }
+
+    func unpoint() {
+        contextCapture.cancel()
+        exchangeTarget = nil
+        lens.hide()
+    }
+
+    func minimize() {
+        minimization.minimize(in: inletRect)
+        lens.hide()
+        set(.rest)
+    }
+
     /// The tilde key is held: your words appear in the conversation as you speak.
     func listen(about referent: Referent?) {
+        contextCapture.cancel()
         exchangeTarget = referent
         set(.listening)
+    }
+
+    func listenCapturingContext(at point: CGPoint) {
+        let request = ContextCapture.snapshot(at: point, includeSelection: true)
+        listen(about: nil)
+        captureListeningContext(request)
+    }
+
+    func reaim(at point: CGPoint) {
+        guard inlet.mode == .listening else { return }
+        captureListeningContext(ContextCapture.snapshot(at: point, includeSelection: true, fallbackToFrontmost: false))
+    }
+
+    private func captureListeningContext(_ request: Pointing.Request?) {
+        contextCapture.start(request) { [weak self] referent in
+            guard let self, self.inlet.mode == .listening else { return }
+            self.exchangeTarget = referent
+            if let referent { self.lens.show(on: referent) } else { self.lens.hide() }
+        }
     }
 
     /// The key was released: send what was heard. Hearing nothing from a real hold opens the composer to
     /// type it instead, saying so; a cancelled one just settles back.
     func heard(_ text: String, cancelled: Bool = false) {
+        contextCapture.cancel()
         lens.hide()
         guard text.isEmpty else { return send(text) }
         if cancelled { return set(.rest) }
@@ -170,6 +228,7 @@ final class InletController {
 
     /// Sends what you said; tilde's reply peeks out as it's written.
     func send(_ text: String) {
+        contextCapture.cancel()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return set(.rest) }
         model.send(text, about: exchangeTarget)
         // "This" belonged to what you just said; the next thing starts fresh.
@@ -194,7 +253,7 @@ final class InletController {
             backToConversation = false
             set(.compose)
         } else {
-            set(.rest)
+            minimize()
         }
     }
 
@@ -204,6 +263,7 @@ final class InletController {
         let thread = model.thread
         let fresh = thread.filter { $0.from == .tilde && !seen.contains($0.id) }
         seen.formUnion(thread.map(\.id))
+        guard !minimization.isMinimized else { return }
 
         if let latest = fresh.last, inlet.mode == .rest || isPeek {
             set(.peek(latest.id))
@@ -292,6 +352,7 @@ final class InletController {
     private func pointerMoved() {
         guard let panel else { return }
         let mouse = NSEvent.mouseLocation
+        minimization.pointerMoved(to: mouse)
         let rect = inletRect
         let taking = rect.contains(mouse)
         if panel.ignoresMouseEvents == taking { panel.ignoresMouseEvents = !taking }
@@ -303,6 +364,7 @@ final class InletController {
     private func intent(at mouse: CGPoint, in rect: CGRect) -> Inlet.Mode? {
         switch inlet.mode {
         case .rest, .peek:
+            if minimization.excludedHoverRect != nil { return nil }
             // Not mid-drag (a window, a file, a selection carried to the edge), not for a peek that came
             // out under a pointer that was just resting there, and not a question's peek, whose buttons
             // would move away as the conversation opened under the pointer (its mark opens it instead).

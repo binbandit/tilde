@@ -7,7 +7,8 @@ import TildeKit
 struct JobView: View {
     @Environment(AppModel.self) private var model
     var job: Job
-    /// Nearly as tall as the Inlet's edge allows.
+    var width: CGFloat = 820
+    /// Includes the header, transcript and footer.
     var height: CGFloat
     var onClose: () -> Void
     @State private var tab: Tab?
@@ -29,9 +30,22 @@ struct JobView: View {
     }
 
     var body: some View {
+        ViewThatFits(in: .vertical) {
+            content
+            ScrollView { content.fixedSize(horizontal: false, vertical: true) }
+        }
+        .frame(width: width, height: min(height, bodyHeight + chromeHeight))
+        .task(id: job.id) { model.loadTranscript(job.id) }
+        .onKeyPress(.escape) {
+            onClose()
+            return .handled
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(spacing: 0) {
-                JobHeader(job: job, tab: Binding { shown } set: { tab = $0 }, onClose: onClose)
+                JobHeader(job: job, tab: Binding { shown } set: { tab = $0 }, compact: width < 620, onClose: onClose)
                 Rectangle().fill(Theme.line).frame(height: 1)
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chrome(header: $0) }
@@ -44,16 +58,18 @@ struct JobView: View {
             .frame(height: bodyHeight)
             VStack(spacing: 0) {
                 Rectangle().fill(Theme.line).frame(height: 1)
-                JobFooter(job: job, onClose: onClose)
+                if width < 620 {
+                    ScrollView(.horizontal) {
+                        JobFooter(job: job, onClose: onClose).frame(width: 620)
+                    }
+                    .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    JobFooter(job: job, onClose: onClose)
+                }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { chrome(footer: $0) }
         }
-        .frame(width: 820)
-        .task(id: job.id) { model.loadTranscript(job.id) }
-        .onKeyPress(.escape) {
-            onClose()
-            return .handled
-        }
+        .frame(width: width)
     }
 }
 
@@ -78,9 +94,19 @@ extension Job {
 private struct JobHeader: View {
     var job: Job
     @Binding var tab: JobView.Tab
+    var compact: Bool
     var onClose: () -> Void
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            row
+            if compact, job.hasChanges { Tabs(job: job, tab: $tab) }
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 18)
+    }
+
+    private var row: some View {
         HStack(alignment: .center, spacing: 13) {
             StatusDot(phase: job.phase, size: 10)
             VStack(alignment: .leading, spacing: 2) {
@@ -90,7 +116,7 @@ private struct JobHeader: View {
                 }
             }
             Spacer(minLength: 16)
-            if job.hasChanges { Tabs(job: job, tab: $tab) }
+            if !compact, job.hasChanges { Tabs(job: job, tab: $tab) }
             Button(action: onClose) {
                 Image(systemName: "xmark").font(.system(size: 10, weight: .heavy)).foregroundStyle(Theme.text2)
                     .frame(width: 26, height: 26)
@@ -98,8 +124,6 @@ private struct JobHeader: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 18)
     }
 }
 

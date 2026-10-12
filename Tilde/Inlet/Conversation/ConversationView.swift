@@ -7,21 +7,56 @@ struct ConversationView: View {
     @Environment(AppModel.self) private var model
     @Environment(Inlet.self) private var inlet
     var referent: Referent?
-    var maxThread: CGFloat
+    var maxHeight: CGFloat
     var actions: InletActions
     @State private var threadHeight: CGFloat = 0
-    @State private var headerHovered = false
+    @State private var chromeHeight: CGFloat = 0
+    @State private var confirmClear = false
+
+    private var history: ConversationVisibility { inlet.history }
+    private var allMessages: [Message] { model.earlier + model.thread }
+    private var questions: Set<String> { Set(model.attention.map(\.id)) }
+    private var protected: Set<String> { history.protectedIDs(in: allMessages, questions: questions) }
+    private var shownThread: [Message] { history.visible(model.thread, protecting: protected) }
+    private var shownEarlier: [Message] { history.visible(model.earlier, protecting: protected) }
+    private var maxThread: CGFloat { max(80, maxHeight - chromeHeight - 14) }
 
     var body: some View {
+        // Normally only the transcript scrolls. On a very short display,
+        // scroll the whole surface so the composer and every control remain reachable.
+        ViewThatFits(in: .vertical) {
+            conversation
+            ScrollView { conversation.fixedSize(horizontal: false, vertical: true) }
+        }
+        .frame(height: min(maxHeight, threadHeight + chromeHeight + 14))
+        .confirmationDialog("Clear completed chat messages?", isPresented: $confirmClear, titleVisibility: .visible) {
+            Button("Clear chat") { history.clear(allMessages, questions: questions) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Running work, pending replies and questions stay available. You can restore cleared messages from the chat menu.")
+        }
+    }
+
+    private var conversation: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0; measureChrome() }
             thread
-            if !model.crew.isEmpty { CrewStrip(actions: actions) }
-            // While you're talking, your words are the pending message above.
-            if inlet.mode != .listening {
-                Composer(referent: referent, focused: inlet.mode == .compose, actions: actions)
+            VStack(alignment: .leading, spacing: 14) {
+                if !model.crew.isEmpty { CrewStrip(actions: actions) }
+                if inlet.mode != .listening {
+                    Composer(referent: referent, focused: inlet.mode == .compose, actions: actions)
+                }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { footerHeight = $0; measureChrome() }
         }
+    }
+
+    @State private var headerHeight: CGFloat = 0
+    @State private var footerHeight: CGFloat = 0
+
+    private func measureChrome() {
+        chromeHeight = (headerHeight + footerHeight + 14).rounded(.up)
     }
 
     private var header: some View {
@@ -35,11 +70,27 @@ struct ConversationView: View {
             }
             .buttonStyle(.plain)
             .help("Settings")
-            .opacity(headerHovered ? 1 : 0)
-            Meta(text: Date.now.formatted(.dateTime.weekday(.wide)), color: Theme.text3)
+            Menu {
+                Button("Clear chat…") { confirmClear = true }
+                    .disabled(!history.canClear(allMessages, questions: questions))
+                Button("Restore cleared messages") { history.restore() }
+                    .disabled(history.hidden.isEmpty)
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text3)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Chat history")
+            .accessibilityLabel("Chat history")
+            Button(action: actions.minimize) {
+                Image(systemName: "minus").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text3)
+                    .frame(width: 24, height: 24)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .help("Minimize chat")
+            .accessibilityLabel("Minimize chat")
         }
-        .onHover { headerHovered = $0 }
-        .animation(Theme.quick, value: headerHovered)
     }
 
     /// The conversation hugs its content until it's tall, then scrolls, newest at the bottom.
@@ -47,16 +98,16 @@ struct ConversationView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 // The end of the last conversation, a scroll away, so the day picks up where it left off.
-                if !model.earlier.isEmpty {
-                    ForEach(Array(model.earlier.enumerated()), id: \.element.id) { index, message in
-                        let gap = Self.gap(before: index, in: model.earlier)
+                if !shownEarlier.isEmpty {
+                    ForEach(Array(shownEarlier.enumerated()), id: \.element.id) { index, message in
+                        let gap = Self.gap(before: index, in: shownEarlier)
                         if let gap { Separator(text: gap, first: index == 0) }
-                        MessageRow(message: message, chips: [], actions: actions, tail: !joins(index + 1, in: model.earlier))
-                            .padding(.top, gap != nil || index == 0 ? 0 : joins(index, in: model.earlier) ? 3 : 12)
+                        MessageRow(message: message, chips: [], actions: actions, tail: !joins(index + 1, in: shownEarlier))
+                            .padding(.top, gap != nil || index == 0 ? 0 : joins(index, in: shownEarlier) ? 3 : 12)
                     }
                     // A question carried over from an earlier day labels itself; "Today" heads the first of today's.
-                    if !(model.thread.first.map { !Calendar.current.isDateInToday($0.at) } ?? false) {
-                        Separator(text: model.thread.first.map { "Today \($0.at.formatted(date: .omitted, time: .shortened))" } ?? "Today", first: false)
+                    if !(shownThread.first.map { !Calendar.current.isDateInToday($0.at) } ?? false) {
+                        Separator(text: shownThread.first.map { "Today \($0.at.formatted(date: .omitted, time: .shortened))" } ?? "Today", first: false)
                     }
                 }
                 // If tilde couldn't start, it says so where you'd talk to it.
@@ -64,28 +115,28 @@ struct ConversationView: View {
                     MessageRow(message: Message(from: .tilde, text: "I couldn't start: \(error)", trouble: true), chips: [], actions: actions)
                         .padding(.bottom, 12)
                 }
-                if model.thread.isEmpty, model.listening == nil {
+                if shownThread.isEmpty, model.listening == nil {
                     Greeting(actions: actions)
                 }
                 let chips = chips
                 let receipts = receipts
-                ForEach(Array(model.thread.enumerated()), id: \.element.id) { index, message in
+                ForEach(Array(shownThread.enumerated()), id: \.element.id) { index, message in
                     // With the last conversation above, "Today" has already said when this one started.
-                    let headed = index == 0 && !model.earlier.isEmpty && Calendar.current.isDateInToday(message.at)
-                    let gap = headed ? nil : Self.gap(before: index, in: model.thread).map { label in
+                    let headed = index == 0 && !shownEarlier.isEmpty && Calendar.current.isDateInToday(message.at)
+                    let gap = headed ? nil : Self.gap(before: index, in: shownThread).map { label in
                         // The first of today's after a carried-over question still says it's today.
-                        index > 0 && !model.earlier.isEmpty && Calendar.current.isDateInToday(message.at)
-                            && !Calendar.current.isDateInToday(model.thread[index - 1].at) ? "Today \(label)" : label
+                        index > 0 && !shownEarlier.isEmpty && Calendar.current.isDateInToday(message.at)
+                            && !Calendar.current.isDateInToday(shownThread[index - 1].at) ? "Today \(label)" : label
                     }
                     if let gap { Separator(text: gap, first: index == 0) }
                     MessageRow(
                         message: message, chips: chips[message.id] ?? [], actions: actions,
-                        tail: !joins(index + 1, in: model.thread, chips: chips, receipts: receipts), receipt: receipts.contains(index))
+                        tail: !joins(index + 1, in: shownThread, chips: chips, receipts: receipts), receipt: receipts.contains(index))
                         // A run from one side sits close together; a new speaker gets room.
-                        .padding(.top, gap != nil || index == 0 ? 0 : joins(index, in: model.thread, chips: chips, receipts: receipts) ? 3 : 12)
+                        .padding(.top, gap != nil || index == 0 ? 0 : joins(index, in: shownThread, chips: chips, receipts: receipts) ? 3 : 12)
                 }
                 if let listening = model.listening {
-                    ListeningRow(listening: listening, referent: referent).padding(.top, model.thread.isEmpty ? 0 : 12)
+                    ListeningRow(listening: listening, referent: referent).padding(.top, shownThread.isEmpty ? 0 : 12)
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { threadHeight = $0.rounded(.up) }
@@ -107,7 +158,7 @@ struct ConversationView: View {
     /// current state is near the bottom and never repeated.
     private var chips: [String: [String]] {
         var latest: [String: String] = [:]
-        for message in model.thread where message.from == .tilde {
+        for message in shownThread where message.from == .tilde {
             for job in message.jobs { latest[job] = message.id }
         }
         return Dictionary(grouping: latest.keys, by: { latest[$0]! }).mapValues { ids in
@@ -117,7 +168,7 @@ struct ConversationView: View {
 
     /// Your messages that say whether tilde has them: the last one, until tilde answers, and any that never got through.
     private var receipts: Set<Int> {
-        let thread = model.thread
+        let thread = shownThread
         var shown = Set(thread.indices.filter { if case .failed = thread[$0].delivery { true } else { false } })
         if let last = thread.lastIndex(where: { $0.from == .you }),
             thread[(last + 1)...].allSatisfy({ $0.from == .tilde && $0.text.isEmpty })

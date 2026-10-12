@@ -55,12 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func trigger(_ event: TriggerKey.Event) {
         switch event {
         case .tap:
-            inlet.compose(about: Pointing.referent(at: NSEvent.mouseLocation) ?? Pointing.frontmost())
+            inlet.composeCapturingContext(at: NSEvent.mouseLocation, includeSelection: true)
         case .holdBegan:
             guard Permission.microphone.granted else {
                 // Without the microphone, holding the key opens the composer instead, saying why.
                 model.cantHear = true
-                inlet.compose(about: Pointing.referent(at: NSEvent.mouseLocation) ?? Pointing.frontmost())
+                inlet.composeCapturingContext(at: NSEvent.mouseLocation, includeSelection: true)
                 Task { _ = await Listener.requestAccess() }
                 return
             }
@@ -82,10 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tapPoint = point
         holdBegan = .now
         loudest = 0
-        let referent = Pointing.referent(at: point) ?? Pointing.frontmost()
-        if let referent { lens.show(on: referent) }
         model.listening = AppModel.Listening()
-        inlet.listen(about: referent)
+        inlet.listenCapturingContext(at: point)
         // Re-aim the Lens as the pointer moves while you talk.
         lensTracking = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
             MainActor.assumeIsolated { self?.reaim() }
@@ -99,9 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard Date.now.timeIntervalSince(lastAim) > 0.06 else { return }
         lastAim = .now
         let point = NSEvent.mouseLocation
-        guard let referent = Pointing.referent(at: point), referent != lens.target else { return }
-        inlet.exchangeTarget = referent
-        lens.show(on: referent)
+        inlet.reaim(at: point)
     }
 
     private func endListening(send: Bool) async {
@@ -125,7 +121,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "tap":
             // Anything can open a link, so a link only fills in the words: sending them is yours.
             model.draft = value("text") ?? ""
-            inlet.compose(about: Pointing.frontmost())
+            inlet.composeCapturingContext()
         case "open":
             inlet.set(.open)
         case "settings":

@@ -46,6 +46,7 @@ struct SettingsView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
+            InletPreferencesSection()
             SourcesSection()
             Section {
                 Picker("Talk to tilde", selection: $trigger) {
