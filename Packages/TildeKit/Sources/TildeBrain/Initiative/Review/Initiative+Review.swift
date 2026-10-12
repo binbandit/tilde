@@ -88,6 +88,8 @@ extension Initiative {
         terminalAgents = ((try? TerminalAgentRegistry(home: home).sessions(now: now)) ?? [])
             .filter { !ownSessions.contains($0.session) }
         waiting = Array(AgentWatch.waiting(since: now.addingTimeInterval(-3 * 3600), own: ownSessions, home: home, now: now).prefix(20))
+        let currentNotices = Set(waiting.map { $0.notice.key })
+        held.removeAll { $0.subject.hasPrefix("agent:") && !currentNotices.contains($0.key) }
     }
 
     func terminalAgentContext(own: Set<String>) -> String {

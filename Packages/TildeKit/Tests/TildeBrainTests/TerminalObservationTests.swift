@@ -64,4 +64,21 @@ import TildeWork
             #expect(AgentWatch.waiting(since: .distantPast, home: home).isEmpty)
         }
     }
+
+    @Test(arguments: ["UserPromptSubmit", "SessionEnd", "disconnect"])
+    func heldWaitingNoticeWithdrawsWhenTheSessionChanges(_ next: String) async throws {
+        try await withProject { home, project, registry in
+            let registration = try registry.register(project: project, adapter: .claude, executable: "/usr/bin/true")
+            try registry.receive(event("Stop", registration: registration), registrationID: registration.id,
+                                 now: .now.addingTimeInterval(-360))
+            let initiative = Initiative(home: home)
+            let notices = AgentWatch.waiting(since: .distantPast, home: home).map(\.notice)
+            #expect(notices.count == 1)
+            #expect(await initiative.due(notices, typing: false, looking: false).isEmpty)
+            if next == "disconnect" { try registry.unregister(id: registration.id) }
+            else { try registry.receive(event(next, registration: registration), registrationID: registration.id) }
+            _ = await initiative.terminalAgentContext(own: [])
+            #expect(await initiative.due([], typing: false, looking: true).isEmpty)
+        }
+    }
 }

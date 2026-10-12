@@ -8,6 +8,7 @@ struct TerminalAgentsSection: View {
     @State private var registrations: [TerminalAgentRegistration] = []
     @State private var sessions: [TerminalAgentSession] = []
     @State private var error: String?
+    @State private var readError: String?
     @State private var setupNote: String?
 
     private var registry: TerminalAgentRegistry {
@@ -43,7 +44,7 @@ struct TerminalAgentsSection: View {
                 }
                 .help("Last lifecycle event. tilde cannot control this terminal session.")
             }
-            if let error { Text(error).foregroundStyle(Theme.failed) }
+            if let error = error ?? readError { Text(error).foregroundStyle(Theme.failed) }
         } header: {
             Text("Terminal agents")
         } footer: {
@@ -63,10 +64,11 @@ struct TerminalAgentsSection: View {
         do {
             registrations = try registry.registrations()
             sessions = try registry.sessions()
+            readError = nil
         } catch {
-            registrations = []
-            sessions = []
-            self.error = error.localizedDescription
+            // A hook may briefly hold the store lock. Keep the last observation
+            // until the next successful read, and clear only this read error then.
+            readError = error.localizedDescription
         }
     }
 

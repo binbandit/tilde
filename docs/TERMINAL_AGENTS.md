@@ -47,6 +47,8 @@ Registration prints the ID, edited project file, and the vendor's review step. R
 
 Only these observer commands are merged into project config. Other settings, hooks, permissions, and trust decisions are preserved. Malformed configuration, symlinks, unsafe ownership or permissions, and oversized files are rejected. The home directory and filesystem root cannot be registered as projects. No user-level hook is installed. Codex may warn when a project has both inline TOML hooks and `hooks.json`; it merges those sources, and tilde does not rewrite the TOML file.
 
+Configuration is rewritten as formatted JSON. Gemini's line and block comments are accepted when reading, but comments and original formatting are not retained; setting values and unrelated hook definitions are preserved.
+
 Removal revokes the registration before touching project configuration. A leftover command after failed cleanup is inert, and its next payload is rejected. If the project file was edited or became unavailable, Settings can report the cleanup failure even though discovery has stopped. Remove the leftover observer command manually after repairing that file. Removal never removes unrelated handlers or deletes a user's configuration file.
 
 ## Local ingress and limits

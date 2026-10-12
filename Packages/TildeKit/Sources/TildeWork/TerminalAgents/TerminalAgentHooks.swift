@@ -18,7 +18,8 @@ enum TerminalAgentHooks {
         guard (original?.count ?? 0) <= maximumConfigBytes else { throw TerminalAgentError.limitExceeded }
         var config: [String: JSON] = [:]
         if let original {
-            guard let object = JSON.parse(original)?.object else { throw TerminalAgentError.invalidConfiguration }
+            let input = registration.adapter == .gemini ? try withoutComments(original) : original
+            guard let object = JSON.parse(input)?.object else { throw TerminalAgentError.invalidConfiguration }
             config = object
         }
         if let value = config["hooks"], value.object == nil { throw TerminalAgentError.invalidConfiguration }
@@ -48,5 +49,50 @@ enum TerminalAgentHooks {
         let result = try encoder.encode(JSON.object(config))
         guard result.count <= maximumConfigBytes else { throw TerminalAgentError.limitExceeded }
         return result
+    }
+
+    /// Gemini accepts JSON with line/block comments. Whitespace keeps comments
+    /// from joining adjacent tokens; strings and escaped quotes stay untouched.
+    private static func withoutComments(_ data: Data) throws -> Data {
+        var bytes = Array(data)
+        var index = 0
+        var inString = false
+        while index < bytes.count {
+            if inString {
+                if bytes[index] == 92 { index += 2; continue }
+                if bytes[index] == 34 { inString = false }
+            } else if bytes[index] == 34 {
+                inString = true
+            } else if bytes[index] == 47, index + 1 < bytes.count {
+                if bytes[index + 1] == 47 {
+                    while index < bytes.count, bytes[index] != 10, bytes[index] != 13 {
+                        bytes[index] = 32
+                        index += 1
+                    }
+                    continue
+                }
+                if bytes[index + 1] == 42 {
+                    bytes[index] = 32
+                    bytes[index + 1] = 32
+                    index += 2
+                    var closed = false
+                    while index < bytes.count {
+                        if bytes[index] == 42, index + 1 < bytes.count, bytes[index + 1] == 47 {
+                            bytes[index] = 32
+                            bytes[index + 1] = 32
+                            index += 2
+                            closed = true
+                            break
+                        }
+                        if bytes[index] != 10 && bytes[index] != 13 { bytes[index] = 32 }
+                        index += 1
+                    }
+                    guard closed else { throw TerminalAgentError.invalidConfiguration }
+                    continue
+                }
+            }
+            index += 1
+        }
+        return Data(bytes)
     }
 }

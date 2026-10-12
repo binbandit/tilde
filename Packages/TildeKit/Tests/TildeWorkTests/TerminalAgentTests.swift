@@ -72,6 +72,36 @@ import TildeSupport
         #expect(remaining["hooks"]?["Stop"]?[0]?["hooks"]?[0]?["command"]?.string == "user-added")
     }
 
+    @Test func geminiAcceptsCommentedSettingsWithoutChangingTheirValues() throws {
+        let (root, project, registry) = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let config = project.appending(path: TerminalAgentAdapter.gemini.configPath)
+        try FileManager.default.createDirectory(at: config.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let original = #"""
+            {
+                // Gemini settings support comments.
+                "example": "https://example.test/a/*literal*/\"//still-string",
+                /* This is not a setting: "hooks": false */
+                "hooks": { "SessionStart": [{"hooks": [{"type": "command", "command": "keep-me"}]}] }
+            }
+            """#
+        try Data(original.utf8).write(to: config)
+        let registration = try registry.register(project: project.path, adapter: .gemini, executable: "/usr/bin/true")
+        let installed = try #require(JSON.parse(Data(contentsOf: config)))
+        #expect(installed["example"]?.string == #"https://example.test/a/*literal*/"//still-string"#)
+        #expect(installed["hooks"]?["SessionStart"]?.array?.count == 2)
+        try registry.unregister(id: registration.id)
+        let remaining = try #require(JSON.parse(Data(contentsOf: config)))
+        #expect(remaining["example"] == installed["example"])
+        #expect(remaining["hooks"]?["SessionStart"]?[0]?["hooks"]?[0]?["command"] == "keep-me")
+        let malformed = Data("{ /* unclosed comment".utf8)
+        try malformed.write(to: config)
+        #expect(throws: TerminalAgentError.self) {
+            try registry.register(project: project.path, adapter: .gemini, executable: "/usr/bin/true")
+        }
+        #expect(try Data(contentsOf: config) == malformed)
+    }
+
     @Test func projectAndHarnessRegistrationsStayIsolated() throws {
         let (root, project, registry) = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
