@@ -197,7 +197,7 @@ enum Terminal {
             NSWorkspace.shared.openApplication(at: ghostty, configuration: config)
             return
         }
-        let script = "tell application \"Terminal\" to do script \"cd \(cwd.replacingOccurrences(of: "\"", with: "\\\"")) && \(command)\""
+        let script = TerminalCommand.appleScript(command, in: cwd)
         NSAppleScript(source: script)?.executeAndReturnError(nil)
     }
 }
