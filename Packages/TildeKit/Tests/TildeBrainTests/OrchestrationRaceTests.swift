@@ -238,13 +238,16 @@ private actor ExitAfterApprovalWorker: Worker {
         conductor.workers[job.id] = old
         let finish = Task { await fixture.call(conductor, "finish", ["job": .string(job.id), "summary": "Old result"]) }
         try await eventually { await old.didStop }
+        var delivery: Task<Void, Error>?
         if cancel {
             finish.cancel()
         } else {
-            try await conductor.deliver("New work", to: job.id, from: .you)
+            delivery = Task { try await conductor.deliver("New work", to: job.id, from: .you) }
+            try await eventually { conductor.deliveriesInFlight[job.id] != nil }
         }
         await old.releaseStop()
         #expect(await finish.value.isError)
+        try await delivery?.value
         #expect(conductor.job(job.id)?.phase == (cancel ? .stopped : .working))
         #expect(!conductor.thread.contains { $0.text.contains("is complete") })
         #expect(!conductor.transcriptStore.load(job.id).contains { $0.kind == .event && $0.text.contains("Complete:") })

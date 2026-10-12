@@ -10,6 +10,8 @@ extension Conductor {
     /// Starts `job`'s worker. `resume` reopens its session instead of starting a new one.
     func spawn(_ job: Job, brief: String, resume: Bool, submission: UUID? = nil) async throws {
         let submission = submission ?? beginSubmission(job.id)
+        try await waitForGitSubmission(job.id)
+        guard !Task.isCancelled, expectedSubmissions[job.id] == submission else { throw DeliveryInterrupted() }
         let generation = UUID()
         workerGenerations[job.id] = generation
         automaticApprovalJobs.remove(job.id)
@@ -21,9 +23,10 @@ extension Conductor {
         // A worktree's commits are written to the repo's own git directory.
         let writable = job.isolation == .worktree ? [(job.repoPath as NSString).appendingPathComponent(".git")] : []
         // What in that git directory makes git run code is noted now, and put back if a turn changes it.
-        if let git = writable.first { gitGuards[job.id] = await GitGuard.snapshot(gitDirectory: git) }
+        let snapshot = await newGitGuard(for: job)
         guard !Task.isCancelled, workerGenerations[job.id] == generation,
             expectedSubmissions[job.id] == submission else { throw DeliveryInterrupted() }
+        try installGitGuard(snapshot, for: job.id)
         let place: Supervision.Place =
             switch job.isolation {
             case .worktree: .worktree
@@ -51,7 +54,7 @@ extension Conductor {
         } catch {
             if workers[job.id].map({ $0 === worker }) == true {
                 let stopped = await stopWorker(job.id)
-                if workerGenerations[job.id] == stopped {
+                if workerGenerations[job.id] == stopped, gitGuardFailures[job.id] == nil {
                     update(job.id) { $0.phase = .failed; $0.ticker = "Worker couldn't start" }
                 }
             } else {
@@ -74,7 +77,8 @@ extension Conductor {
         turnEnded.removeValue(forKey: id)
         for (request, pending) in requests where pending.job == id { requests.removeValue(forKey: request) }
         for item in attention where item.jobID == id && item.requestID != nil { withdraw(item.id, because: "the agent stopped") }
-        await workers.removeValue(forKey: id)?.stop()
+        let worker = workers.removeValue(forKey: id)
+        _ = await beginGitCleanup(id, stopping: worker).value
         return generation
     }
 
@@ -121,14 +125,11 @@ extension Conductor {
             let ended = Date.now
             turnEnded[jobID] = ended
             successfulTurns.remove(jobID)
+            let cleanup = beginGitCleanup(jobID)
             Task {
-                let tampered = await gitGuards[jobID]?.restore(gitDirectory: (job.repoPath as NSString).appendingPathComponent(".git")) ?? []
-                if !tampered.isEmpty {
-                    let what = "The agent changed \(tampered.joined(separator: ", ")) in the repo's git setup, which make git run code; tilde put them back."
-                    Log.info("guard", "\(jobID): \(what)")
-                    record(jobID, .tilde, .event, what)
-                    emit(.said("\(job.title): \(what)", jobID: jobID))
-                }
+                guard await cleanup.value, expectedSubmissions[jobID] == submission,
+                    acceptedSubmissions[jobID] == submission, self.job(jobID)?.phase.isActive == true,
+                    turnEnded[jobID] == ended, (handed[jobID] ?? .distantPast) <= ended else { return }
                 var diff: DiffStat?
                 if let base = job.baseCommit { diff = try? await Git.checkedDiffStat(workdir: job.workdir, base: base) }
                 // Stopped (or taken over) while that was being worked out: it stays that way.
@@ -150,21 +151,25 @@ extension Conductor {
                     """, jobs: [jobID]))
             }
         case .exited(let detail):
-            workerGenerations[jobID] = UUID()
+            let generation = UUID()
+            workerGenerations[jobID] = generation
             expectedSubmissions[jobID] = nil
             acceptedSubmissions[jobID] = nil
             pendingCompletions[jobID] = nil
             automaticApprovalJobs.remove(jobID)
-            workers.removeValue(forKey: jobID)
+            let worker = workers.removeValue(forKey: jobID)
             for (id, pending) in requests where pending.job == jobID { requests.removeValue(forKey: id) }
             for item in attention where item.jobID == jobID && item.requestID != nil { withdraw(item.id, because: "the agent stopped") }
-            guard let job = jobs.first(where: { $0.id == jobID }), job.phase.isActive else { return }
-            update(jobID) {
-                $0.phase = detail == nil ? .stopped : .failed
-                $0.ticker = detail.map { $0.clipped(to: 80) } ?? "Stopped"
-            }
-            record(jobID, .agent, .event, detail ?? "Exited")
+            let wasActive = job(jobID)?.phase.isActive == true
+            let cleanup = beginGitCleanup(jobID, stopping: worker)
             Task {
+                guard await cleanup.value, workerGenerations[jobID] == generation else { return }
+                guard wasActive else { return }
+                update(jobID) {
+                    $0.phase = detail == nil ? .stopped : .failed
+                    $0.ticker = detail.map { $0.clipped(to: 80) } ?? "Stopped"
+                }
+                record(jobID, .agent, .event, detail ?? "Exited")
                 await manager.post(.init(
                     "<worker-stopped job=\"\(jobID)\">\(detail ?? "The worker exited.")</worker-stopped>", jobs: [jobID]))
             }
