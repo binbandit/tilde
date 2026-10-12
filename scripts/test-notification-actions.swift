@@ -104,7 +104,8 @@ final class UNUserNotificationCenter {
 
 enum CGEventSource {
     enum State { case combinedSessionState }
-    static func secondsSinceLastEventType(_ state: State, eventType: CGEventType) -> Double { 120 }
+    static var idleSeconds: Double = 120
+    static func secondsSinceLastEventType(_ state: State, eventType: CGEventType) -> Double { idleSeconds }
 }
 struct CGEventType { init?(rawValue: Int) {} }
 struct Job { var title = "fixture", projectName = "fixture" }
@@ -121,11 +122,12 @@ enum Conductor {
 }
 final class InletController {
     final class State {
-        enum Mode: Equatable { case rest, job(String) }
+        enum Mode: Equatable { case rest, compose, job(String) }
         var mode = Mode.rest
         var isConversation = false
     }
     let inlet = State()
+    var isMinimized = false
     func openJob(_ job: Job) {}
     func compose(about: String?) {}
 }
@@ -137,7 +139,7 @@ struct NotificationActionsTests {
         Attention(id: id, jobID: nil, question: "Question \(id)", options: ["Wait", "Proceed."], recommended: 1,
                   detail: nil, requestID: nil, isApproval: false)
     }
-    static func setup(_ items: [Attention]) -> (Notifications, AppModel, UNUserNotificationCenter) {
+    static func setup(_ items: [Attention], inlet: InletController = InletController()) -> (Notifications, AppModel, UNUserNotificationCenter) {
         let center = UNUserNotificationCenter()
         center.categories = [
             UNNotificationCategory(identifier: "external", actions: [], intentIdentifiers: []),
@@ -146,7 +148,7 @@ struct NotificationActionsTests {
         UNUserNotificationCenter.fixture = center
         let model = AppModel()
         model.attention = items
-        return (Notifications(model: model, inlet: InletController()), model, center)
+        return (Notifications(model: model, inlet: inlet), model, center)
     }
     static func main() async {
         do { try await check() } catch {
@@ -156,7 +158,8 @@ struct NotificationActionsTests {
     }
     static func check() async throws {
         let a = ask("a"), b = ask("b")
-        let (notifications, model, center) = setup([a, b])
+        let inlet = InletController()
+        let (notifications, model, center) = setup([a, b], inlet: inlet)
         notifications.handle(.asked(a))
         notifications.handle(.asked(b))
         try await eventually("both questions published") { center.addEnds == 2 }
@@ -164,6 +167,7 @@ struct NotificationActionsTests {
                    "Posting a second question removed an outstanding or unrelated category")
         let category = center.categories.first { $0.identifier == "ask.a" }!
         try expect(category.actions.map(\.identifier) == ["option.0.Proceed.", "option.1.Wait", "reply"], "Question actions changed")
+        try checkReplies(notifications, inlet: inlet, center: center)
         let response = UNNotificationResponse(notification: UNNotification(request: center.delivered["a"]!), actionIdentifier: "option.0.Proceed.")
         await notifications.userNotificationCenter(center, didReceive: response)
         try expect(model.answers["a"] == "Proceed.", "Inline answer did not retain punctuation")
@@ -201,7 +205,41 @@ struct NotificationActionsTests {
         inFlightCenter.releaseAdds()
         try await eventually("resolved in-flight notification removed") { inFlightCenter.addEnds == 1 && inFlightCenter.delivered[a.id] == nil }
         try expect(inFlightCenter.removedPending.contains(a.id), "Resolved pending notification was not removed")
-        print("Passed notification category retention, restoration, action delivery, concurrent registration, and resolution-race fixtures.")
+        print("Passed notification category retention, restoration, action delivery, concurrent registration, resolution races, and away/minimized reply fixtures.")
+    }
+    static func checkReplies(_ notifications: Notifications, inlet: InletController, center: UNUserNotificationCenter) throws {
+        let categories = Dictionary(uniqueKeysWithValues: center.categories.map { ($0.identifier, $0.actions.map(\.identifier)) })
+        let questions = center.delivered
+        let cases: [(String, Double, InletController.State.Mode, Bool, Bool)] = [
+            ("away with minimized conversation", 120, .compose, true, true),
+            ("away with visible conversation", 120, .compose, false, false),
+            ("active with minimized conversation", 0, .compose, true, false),
+            ("away at rest", 120, .rest, false, true),
+        ]
+        defer {
+            CGEventSource.idleSeconds = 120
+            inlet.inlet.mode = .rest
+            inlet.inlet.isConversation = false
+            inlet.isMinimized = false
+        }
+        for (name, idle, mode, minimized, shouldPublish) in cases {
+            CGEventSource.idleSeconds = idle
+            inlet.inlet.mode = mode
+            inlet.inlet.isConversation = mode == .compose
+            inlet.isMinimized = minimized
+            let before = center.added.count
+            notifications.handle(.replied("**Reply** while away."))
+            try expect(center.added.count == before + (shouldPublish ? 1 : 0), "Wrong reply notification count: \(name)")
+            if shouldPublish {
+                let request = center.delivered[center.added.last!]!
+                try expect(request.content.body == "Reply while away.", "Reply notification lost its plain text: \(name)")
+            }
+            let currentCategories = Dictionary(uniqueKeysWithValues: center.categories.map { ($0.identifier, $0.actions.map(\.identifier)) })
+            try expect(currentCategories == categories, "Reply changed outstanding question actions: \(name)")
+            for (id, request) in questions {
+                try expect(center.delivered[id] === request, "Reply replaced an outstanding question: \(name)")
+            }
+        }
     }
     static func expect(_ condition: Bool, _ message: String) throws {
         if !condition { throw Failure(description: message) }
