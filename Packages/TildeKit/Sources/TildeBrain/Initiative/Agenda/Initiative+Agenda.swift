@@ -17,6 +17,8 @@ struct Due: Sendable, Equatable {
     var job: String?
     /// The goal whose check-in this is; its whole note goes to the manager so it can plan from it.
     var goal: Goal?
+    /// A one-off's agenda line, retained until the manager accepts its delivery.
+    var agendaLine: String?
 
     var project: String? { goal?.project }
 
@@ -61,20 +63,19 @@ extension Initiative {
         return matches
     }
 
-    /// What came due since the last look. One-off follow-ups leave agenda.md as they're handed over;
+    /// What came due since the last look. One-off follow-ups stay in agenda.md until accepted;
     /// each routine run and each goal check-in is delivered once. A routine first seen now waits for
     /// its next time, and one missed by hours (the Mac was asleep) is skipped rather than delivered late.
     func comingDue(now: Date = .now, calendar: Calendar = .current) async -> [Due] {
-        var agenda = agenda(calendar: calendar)
+        let agenda = agenda(calendar: calendar)
         var found: [Due] = []
-        var delivered: [Agenda.Item] = []
         var routines: Set<String> = []
         for item in agenda.items {
             switch item.when {
             case .once(let date):
-                guard date <= now else { continue }
-                found.append(Due(kind: .followUp, text: item.text, at: date, job: item.job))
-                delivered.append(item)
+                let line = item.line(calendar: calendar)
+                guard date <= now, pendingFollowUps.insert(line).inserted else { continue }
+                found.append(Due(kind: .followUp, text: item.text, at: date, job: item.job, agendaLine: line))
             case .every:
                 let key = item.line(calendar: calendar)
                 routines.insert(key)
@@ -99,12 +100,23 @@ extension Initiative {
             found.append(Due(kind: .checkIn, text: goal.title, at: checkIn, goal: goal))
         }
 
-        if !delivered.isEmpty {
-            delivered.forEach { agenda.remove($0) }
-            await save(agenda, reason: "follow-ups handed to tilde")
-        }
         persist()
         return found.sorted { $0.at < $1.at }
+    }
+
+    /// Accepted follow-ups leave the notebook. Failed sends become due again at the next look;
+    /// a restart also retries, because pending claims only live in memory.
+    func delivered(_ items: [Due], accepted: Bool) async {
+        let lines = Set(items.compactMap(\.agendaLine)).intersection(pendingFollowUps)
+        guard !lines.isEmpty else { return }
+        if accepted {
+            var agenda = agenda()
+            for line in lines {
+                if let item = Agenda.Item(line: line) { agenda.remove(item) }
+            }
+            await save(agenda, reason: "follow-ups handed to tilde")
+        }
+        pendingFollowUps.subtract(lines)
     }
 
     /// What's coming after `start` up to `end`: follow-ups, routine runs and goal check-ins, soonest first.

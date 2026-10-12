@@ -39,6 +39,8 @@ public actor Initiative {
     var seen: Seen
     /// Observations waiting for the right moment.
     var held: [Notice] = []
+    /// One-off follow-ups queued for the manager, still on disk until it accepts them.
+    var pendingFollowUps: Set<String> = []
     private var interrupts: [Date] = []
     /// GitHub is asked at most every few minutes; between polls the last answer stands.
     var pulls: [PullRequestWatch.Pull] = []

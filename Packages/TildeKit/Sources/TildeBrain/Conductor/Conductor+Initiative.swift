@@ -64,7 +64,9 @@ extension Conductor {
     func remind(_ items: [Due]) {
         Log.info("initiative", "due: " + items.map(\.text).joined(separator: " | "))
         Task {
-            await manager.post(.init(Due.message(items), paths: items.compactMap(\.project), jobs: items.compactMap(\.job)))
+            var message = Manager.Message(Due.message(items), paths: items.compactMap(\.project), jobs: items.compactMap(\.job))
+            message.onDelivery = { [initiative] accepted in await initiative?.delivered(items, accepted: accepted) }
+            await manager.post(message)
         }
     }
 

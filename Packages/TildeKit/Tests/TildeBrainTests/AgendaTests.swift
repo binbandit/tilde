@@ -128,6 +128,9 @@ struct CannedModel: MemoryModel {
         let first = await initiative.comingDue(now: at("2026-10-09 17:01"), calendar: calendar)
         #expect(first.map(\.text) == ["check on the nav bar (j-n8v3)"])
         #expect(first.map(\.kind) == [.followUp] && first.first?.job == "j-n8v3")
+        #expect(agendaFile.contains("nav bar"))
+        #expect(await due(initiative, "2026-10-09 17:02").isEmpty)
+        await initiative.delivered(first, accepted: true)
         #expect(!agendaFile.contains("nav bar") && agendaFile.contains("ask Sam about pricing"))
 
         #expect(await due(initiative, "2026-10-09 17:02").isEmpty)
