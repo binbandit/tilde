@@ -104,6 +104,24 @@ import Testing
         #expect(await guardState.restoreSafely(gitDirectory: f.git.path) == GitGuard.Restoration())
     }
 
+    @Test func enabledWorktreeConfigurationIsRefusedBeforeRestoration() async throws {
+        let f = try Fixture()
+        defer { f.remove() }
+        try f.write("[extensions]\n\tworktreeConfig = true\n", to: f.config)
+        let linked = f.git.appending(path: "worktrees/job")
+        try FileManager.default.createDirectory(at: linked, withIntermediateDirectories: true)
+        let linkedConfig = linked.appending(path: "config.worktree")
+        try f.write("[core]\n\tfsmonitor = original-inert-value\n", to: linkedConfig)
+        let guardState = await GitGuard.snapshot(gitDirectory: f.git.path)
+        try f.write("[core]\n\tfsmonitor = changed-inert-value\n", to: linkedConfig)
+
+        #expect(guardState.snapshotRefusals == ["extensions.worktreeConfig"])
+        let result = await guardState.restoreSafely(gitDirectory: f.git.path)
+        #expect(result.refused == ["extensions.worktreeConfig"])
+        #expect(result.restored.isEmpty)
+        #expect(try f.text(linkedConfig).contains("changed-inert-value"))
+    }
+
     @Test func unreadableSnapshotCannotBeMistakenForAnEmptySnapshot() async throws {
         let f = try Fixture()
         defer { f.remove() }

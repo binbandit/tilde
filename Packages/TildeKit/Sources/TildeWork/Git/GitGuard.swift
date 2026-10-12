@@ -27,6 +27,9 @@ public struct GitGuard: Sendable, Equatable {
     private var hooks: [String: Hook] = [:]
     private var snapshotFailures: [String] = []
 
+    /// A worker must not start when its git metadata cannot be safely guarded.
+    public var snapshotRefusals: [String] { snapshotFailures }
+
     // Enabling worktreeConfig can introduce another source of executable configuration.
     static let runsCode =
         #"^(core\.(fsmonitor|hookspath|sshcommand|pager|editor|askpass|gitproxy)|diff\.external|diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|merge\..+\.driver|alias\..+|include\.path|includeif\..+\.path|credential\.(.+\.)?helper|gpg\.(.+\.)?program|sequence\.editor|pager\..+|interactive\.difffilter|uploadpack\.packobjectshook|extensions\.worktreeconfig)$"#
@@ -41,6 +44,13 @@ public struct GitGuard: Sendable, Equatable {
         for name in ["config", "config.worktree"] {
             do { snapshot.configs[name] = try await codeKeys(root.read(name)?.data ?? Data()) }
             catch { snapshot.snapshotFailures.append(name) }
+        }
+        // Linked worktrees store their own config under worktrees/<name>/config.worktree.
+        // Until those directories are independently anchored, fail closed for enabled repositories.
+        if let value = snapshot.configs["config"]?["extensions.worktreeconfig"]?.last,
+            !["false", "no", "off", "0"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        {
+            snapshot.snapshotFailures.append("extensions.worktreeConfig")
         }
         do {
             if let directory = try root.child("hooks") {
