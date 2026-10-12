@@ -23,6 +23,10 @@ install destination="": build
 test-install:
     bash scripts/test-install.sh
 
+# Terminal handoff quoting, without opening Terminal
+test-terminal:
+    bash scripts/test-terminal-command.sh
+
 # Build and (re)launch the app
 run: build
     -pkill -x tilde
