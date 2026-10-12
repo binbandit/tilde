@@ -111,7 +111,9 @@ struct Composer: View {
         guard !text.isEmpty else { return }
         model.draft = ""
         if let answering {
+            actions.unpoint()
             model.answer(answering, with: text)
+            actions.submitted()
         } else {
             actions.send(text)
         }

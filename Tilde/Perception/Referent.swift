@@ -4,7 +4,7 @@ import TildeKit
 
 /// The thing under the cursor when you tap: what the Lens outlines and what
 /// "this" means to the manager.
-struct Referent: Equatable {
+nonisolated struct Referent: Equatable, Sendable {
     var app: String
     var bundleID: String?
     var pid: pid_t
@@ -27,7 +27,23 @@ struct Referent: Equatable {
 }
 
 /// Reads what's under a point through the Accessibility API.
-enum Pointing {
+nonisolated enum Pointing {
+    /// Values captured before tilde takes focus. No AppKit or AX objects cross actors.
+    struct Application: Sendable {
+        let name: String
+        let bundleID: String?
+        let pid: pid_t
+    }
+
+    struct Request: Sendable {
+        let application: Application
+        /// A point in Quartz coordinates, scoped to the application that owned it at capture time.
+        let point: CGPoint?
+        let fallback: Application?
+        let coordinates: Coordinates.Snapshot
+        let includeSelection: Bool
+    }
+
     static let terminals: Set<String> = [
         "com.mitchellh.ghostty", "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.github.wez.wezterm",
         "net.kovidgoyal.kitty", "org.alacritty",
@@ -35,35 +51,42 @@ enum Pointing {
 
     static var isTrusted: Bool { AXIsProcessTrusted() }
 
-    static func requestTrust() {
+    @MainActor static func requestTrust() {
         // kAXTrustedCheckOptionPrompt's value; the constant itself is a mutable global.
         AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
 
-    /// What's under `point` (Cocoa coordinates). Points at a selection, a file,
-    /// or otherwise the whole window: the granularity people mean by "this".
-    static func referent(at point: CGPoint) -> Referent? {
-        let quartz = Coordinates.quartz(point)
-        var hit: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(quartz.x), Float(quartz.y), &hit) == .success,
-            let element = hit
-        else { return nil }
-        var pid: pid_t = 0
-        AXUIElementGetPid(element, &pid)
-        guard pid != ProcessInfo.processInfo.processIdentifier, let app = NSRunningApplication(processIdentifier: pid) else { return nil }
+    /// Blocking AX and process work. Call through ContextCapture on interactive paths.
+    static func capture(_ request: Request) -> Referent? {
+        guard !Task.isCancelled else { return nil }
+        if let result = referent(in: request.application, at: request.point, request: request) { return result }
+        guard !Task.isCancelled, let fallback = request.fallback else { return nil }
+        return referent(in: fallback, at: nil, request: request)
+    }
 
-        let window = ancestor(of: element, role: kAXWindowRole) ?? focusedWindow(pid)
-        let windowTitle = window.flatMap { string($0, kAXTitleAttribute) }
-        var document = window.flatMap { string($0, kAXDocumentAttribute) }.flatMap(path(fromURL:))
-        var frame = window.flatMap(frameOf) ?? .zero
-        let name = app.localizedName ?? "App"
+    private static func referent(in app: Application, at point: CGPoint?, request: Request) -> Referent? {
+        var hit: AXUIElement?
+        if let point {
+            // The global hit test could now hit tilde, or a newly activated app. The original
+            // application's hierarchy keeps the request tied to what the user pointed at.
+            let application = AXUIElementCreateApplication(app.pid)
+            guard AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &hit) == .success else { return nil }
+        }
+        let window = hit.flatMap { ancestor(of: $0, role: kAXWindowRole) } ?? focusedWindow(app.pid)
+        guard let window, !Task.isCancelled else { return nil }
+        let element = hit ?? window
+        let windowTitle = string(window, kAXTitleAttribute)
+        var document = string(window, kAXDocumentAttribute).flatMap(path(fromURL:))
+        var frame = frameOf(window, coordinates: request.coordinates) ?? .zero
+        let name = app.name
         var label = [windowTitle.map { Titles.short($0, app: name) }, name].compactMap { $0 }.joined(separator: " · ")
         var selection: String?
 
         // A file under the cursor (Finder, open panels, sidebars).
-        if let url = firstAncestorValue(of: element, kAXURLAttribute), let file = path(fromURL: url) {
+        if point != nil, let url = firstAncestorValue(of: element, kAXURLAttribute), let file = path(fromURL: url) {
             document = file
-            if let row = ancestor(of: element, role: kAXRowRole) ?? ancestor(of: element, role: "AXGroup"), let rowFrame = frameOf(row),
+            if let row = ancestor(of: element, role: kAXRowRole) ?? ancestor(of: element, role: "AXGroup"),
+                let rowFrame = frameOf(row, coordinates: request.coordinates),
                 rowFrame.width < frame.width * 0.9
             {
                 frame = rowFrame
@@ -72,32 +95,30 @@ enum Pointing {
         }
 
         // Selected text in what you're pointing at.
-        if let text = string(element, kAXSelectedTextAttribute) ?? focusedSelection(pid), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if request.includeSelection, let text = string(element, kAXSelectedTextAttribute) ?? focusedSelection(app.pid),
+            !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
             selection = text
             let lines = text.split(separator: "\n").count
             label = "Selection (\(lines) line\(lines == 1 ? "" : "s"))\(document.map { " in \(($0 as NSString).lastPathComponent)" } ?? "") · \(name)"
         }
 
         var cwd: String?
-        if let bundle = app.bundleIdentifier, terminals.contains(bundle) {
-            cwd = Shells.cwd(forTerminal: pid, title: windowTitle)
+        guard !Task.isCancelled else { return nil }
+        if let bundle = app.bundleID, terminals.contains(bundle) {
+            cwd = Shells.cwd(forTerminal: app.pid, title: windowTitle)
             if let cwd { label = "\((cwd as NSString).abbreviatingWithTildeInPath) · \(name)" }
         }
         let repo = Repos.root(containing: document ?? cwd)
 
         return Referent(
-            app: name, bundleID: app.bundleIdentifier, pid: pid, frame: frame, label: label, windowTitle: windowTitle,
+            app: name, bundleID: app.bundleID, pid: app.pid, frame: frame, label: label, windowTitle: windowTitle,
             document: document, cwd: cwd, repo: repo, selection: selection.map { String($0.prefix(8_000)) })
     }
 
     /// The frontmost app's focused window, as a referent (for typed taps with no pointing).
-    static func frontmost() -> Referent? {
-        guard let app = NSWorkspace.shared.frontmostApplication, app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-            let window = focusedWindow(app.processIdentifier), let frame = frameOf(window)
-        else { return nil }
-        return referent(at: CGPoint(x: frame.midX, y: frame.maxY - 60)) ?? Referent(
-            app: app.localizedName ?? "App", bundleID: app.bundleIdentifier, pid: app.processIdentifier, frame: frame,
-            label: app.localizedName ?? "App")
+    @MainActor static func frontmost() -> Referent? {
+        ContextCapture.snapshot(includeSelection: true).flatMap(capture)
     }
 
     // MARK: AX helpers
@@ -112,12 +133,12 @@ enum Pointing {
         return element(app, kAXFocusedUIElementAttribute).flatMap { string($0, kAXSelectedTextAttribute) }
     }
 
-    static func frameOf(_ element: AXUIElement) -> CGRect? {
+    static func frameOf(_ element: AXUIElement, coordinates: Coordinates.Snapshot) -> CGRect? {
         var position = CGPoint.zero, size = CGSize.zero
         guard let p = value(element, kAXPositionAttribute), let s = value(element, kAXSizeAttribute),
             AXValueGetValue(p as! AXValue, .cgPoint, &position), AXValueGetValue(s as! AXValue, .cgSize, &size)
         else { return nil }
-        return Coordinates.cocoa(CGRect(origin: position, size: size))
+        return coordinates.cocoa(CGRect(origin: position, size: size))
     }
 
     static func ancestor(of element: AXUIElement, role: String, depth: Int = 12) -> AXUIElement? {
@@ -141,6 +162,7 @@ enum Pointing {
     }
 
     static func value(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+        guard !Task.isCancelled else { return nil }
         var result: CFTypeRef?
         return AXUIElementCopyAttributeValue(element, attribute as CFString, &result) == .success ? result : nil
     }
@@ -162,7 +184,7 @@ enum Pointing {
 }
 
 /// Finds the git repo a path sits in, by walking up to a `.git`.
-enum Repos {
+nonisolated enum Repos {
     static func root(containing path: String?) -> String? {
         guard var url = path.map({ URL(fileURLWithPath: $0) }) else { return nil }
         let fm = FileManager.default
@@ -176,7 +198,7 @@ enum Repos {
     }
 }
 
-enum Titles {
+nonisolated enum Titles {
     /// Window titles can be long ("ContentView.swift", a dash, "paradise", a dash, "Edited"); keep the
     /// meaningful head. Browsers end theirs with their own name ("Inbox - Google Chrome - Work"),
     /// which the label already says.

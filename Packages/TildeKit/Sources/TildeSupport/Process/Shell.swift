@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Short-lived commands (git, gh, auth probes) whose whole output we want.
 public enum Shell {
@@ -27,50 +28,46 @@ public enum Shell {
         _ command: [String], cwd: String? = nil, environment: [String: String] = UserEnvironment.shared.variables,
         input: String? = nil, timeout: Duration? = nil
     ) async throws -> Output {
-        let executable = try ChildProcess.resolve(command[0], path: environment["PATH"] ?? "")
-        return try await withCheckedThrowingContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            process.arguments = Array(command.dropFirst())
-            process.environment = environment
-            if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-            let out = Pipe(), err = Pipe(), stdin = Pipe()
-            process.standardOutput = out
-            process.standardError = err
-            process.standardInput = stdin
-
-            // Drain both pipes concurrently so a chatty command can't deadlock on a full buffer.
-            let group = DispatchGroup()
-            nonisolated(unsafe) var outData = Data(), errData = Data()
-            nonisolated(unsafe) var timedOut = false
-            group.enter()
-            DispatchQueue.global().async { outData = out.fileHandleForReading.readDataToEndOfFile(); group.leave() }
-            group.enter()
-            DispatchQueue.global().async { errData = err.fileHandleForReading.readDataToEndOfFile(); group.leave() }
-
-            process.terminationHandler = { process in
-                group.notify(queue: .global()) {
-                    continuation.resume(returning: Output(
-                        status: process.terminationStatus,
-                        stdout: String(decoding: outData, as: UTF8.self),
-                        stderr: String(decoding: errData, as: UTF8.self),
-                        timedOut: timedOut))
-                }
+        try Task.checkCancellation()
+        guard let executable = command.first else { throw ChildProcess.Failure.notFound("") }
+        let output = Mutex((stdout: Data(), stderr: Data(), timedOut: false))
+        let process = try ChildProcess(
+            .init(executable: executable, arguments: Array(command.dropFirst()),
+                  cwd: cwd ?? FileManager.default.currentDirectoryPath, environment: environment),
+            stdout: { chunk in output.withLock { $0.stdout.append(chunk) } },
+            stderr: { chunk in output.withLock { $0.stderr.append(chunk) } })
+        let deadline = timeout.map { timeout in
+            Task {
+                do { try await Task.sleep(for: timeout) } catch { return }
+                guard !process.isFinished else { return }
+                output.withLock { $0.timedOut = true }
+                await process.terminate(grace: .milliseconds(100))
+                process.stopOutput()
             }
+        }
+        defer { deadline?.cancel() }
+        return try await withTaskCancellationHandler {
             do {
-                try process.run()
-                if let timeout {
-                    let (seconds, attoseconds) = timeout.components
-                    DispatchQueue.global().asyncAfter(deadline: .now() + Double(seconds) + Double(attoseconds) / 1e18) {
-                        guard process.isRunning else { return }
-                        timedOut = true
-                        process.terminate()
-                    }
-                }
-                if let input { stdin.fileHandleForWriting.write(Data(input.utf8)) }
-                try? stdin.fileHandleForWriting.close()
+                if let input { try process.write(Data(input.utf8)) }
             } catch {
-                continuation.resume(throwing: error)
+                await process.terminate(grace: .milliseconds(100))
+                process.stopOutput()
+                // A deadline/cancellation can close a pipe while a large input is being
+                // written. Report that cause, rather than replacing it with stdinClosed.
+                if !output.withLock({ $0.timedOut }) && !Task.isCancelled { throw error }
+            }
+            process.closeStdin()
+            let status = await process.waitForExit()
+            await process.waitForOutput()
+            try Task.checkCancellation()
+            return output.withLock {
+                Output(status: status, stdout: String(decoding: $0.stdout, as: UTF8.self),
+                       stderr: String(decoding: $0.stderr, as: UTF8.self), timedOut: $0.timedOut)
+            }
+        } onCancel: {
+            Task {
+                await process.terminate(grace: .milliseconds(100))
+                process.stopOutput()
             }
         }
     }

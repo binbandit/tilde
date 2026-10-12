@@ -9,6 +9,7 @@ struct QuestionOptions: View {
     var item: Attention
     /// ⌘↩ answers with tilde's pick (for the question you're looking at).
     var acceptsReturn = false
+    var submitted: () -> Void = {}
     @State private var always = false
 
     var body: some View {
@@ -60,7 +61,10 @@ struct QuestionOptions: View {
         }
     }
 
-    private func answer(_ reply: String) { model.answer(item, with: reply, always: always) }
+    private func answer(_ reply: String) {
+        model.answer(item, with: reply, always: always)
+        submitted()
+    }
 }
 
 /// One answer: a pill in a row, or a full-width row of its own when they stack. tilde's pick is filled amber.
