@@ -74,7 +74,7 @@ public actor Scribe {
     }
 
     private func extract(from exchange: String) async -> Ops? {
-        let context = await memory.briefing(for: exchange) ?? ""
+        let context = await memory.context(for: exchange) ?? ""
         let prompt = """
             \(context)
 

@@ -71,14 +71,21 @@ public actor Memory {
     /// The memory block that precedes a manager turn. `nil` when nothing is relevant.
     public func briefing(for text: String, paths: [String] = [], jobs: [String] = []) -> String? {
         refresh()
-        var blocks: [String] = []
-
         // The core rides along whenever it changed since the manager last saw it.
         let core = core()
-        if core != lastCore {
-            blocks.append(core)
-            lastCore = core
-        }
+        let changed = core != lastCore
+        lastCore = core
+        return context(for: text, paths: paths, jobs: jobs, core: changed ? core : nil)
+    }
+
+    /// A fresh model session needs the whole core without consuming the manager's next update.
+    public func context(for text: String) -> String? {
+        refresh()
+        return context(for: text, paths: [], jobs: [], core: core())
+    }
+
+    private func context(for text: String, paths: [String], jobs: [String], core: String?) -> String? {
+        var blocks = core.map { [$0] } ?? []
 
         var included: Set<String> = ["me.md", "rules.md"]
         for path in jobs.map({ "tasks/\($0).md" }) + index.notes(mentionedIn: text, paths: paths) where !included.contains(path) {
@@ -136,6 +143,9 @@ public actor Memory {
     @discardableResult
     public func forget(_ fact: String, about: String) async throws -> String? {
         var note = await note(about: about, kind: nil)
+        guard note.path != "rules.md" else {
+            throw Notebook.Refused(description: "Rules are \(Owner.firstName)'s to write.")
+        }
         guard let match = supersededFact(in: note, by: fact, hint: fact, threshold: 0.9) else { return nil }
         note.remove(match)
         try write(note)
