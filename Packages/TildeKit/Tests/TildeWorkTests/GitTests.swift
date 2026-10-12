@@ -72,6 +72,25 @@ import WorkerKit
         await #expect(throws: Git.LandFailure.self) { try await Git.land(job) }
     }
 
+    @Test(arguments: [false, true]) func refusesToLandAfterTheWorkerLeavesItsBranch(detached: Bool) async throws {
+        try await makeRepo()
+        let job = try await makeJob()
+        if detached {
+            try await git("switch", "--detach", cwd: job.workdir)
+        } else {
+            try await git("switch", "-c", "worker-choice", cwd: job.workdir)
+        }
+        try "result\n".write(toFile: "\(job.workdir)/Result.swift", atomically: true, encoding: .utf8)
+        let checkoutHead = try await Git.head(repo)
+        let workerHead = try await Git.head(job.workdir)
+
+        await #expect(throws: Git.LandFailure.self) { try await Git.land(job) }
+        #expect(try await Git.head(repo) == checkoutHead)
+        #expect(try await Git.head(job.workdir) == workerHead)
+        #expect(try String(contentsOfFile: "\(job.workdir)/Result.swift", encoding: .utf8) == "result\n")
+        #expect(try await Git.isDirty(job.workdir))
+    }
+
     @Test func picksAFreeBranchName() async throws {
         try await makeRepo()
         _ = try await makeJob()
