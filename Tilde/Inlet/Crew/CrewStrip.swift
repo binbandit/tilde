@@ -12,8 +12,8 @@ struct CrewStrip: View {
     private var crew: [Job] { model.crew }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
+            FlowLayout(spacing: 6) {
                 ForEach(crew.prefix(16)) { job in
                     Button { actions.openJob(job) } label: {
                         StatusDot(phase: job.phase)
@@ -32,7 +32,6 @@ struct CrewStrip: View {
                 .foregroundStyle(hovered == nil ? Theme.text3 : Theme.text2)
                 .lineLimit(1)
                 .contentTransition(.opacity)
-            Spacer(minLength: 0)
         }
         .animation(Theme.quick, value: hovered)
     }

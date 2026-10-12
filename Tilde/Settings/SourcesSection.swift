@@ -13,7 +13,7 @@ struct SourcesSection: View {
             row("Calendar", model.schedule.calendarAccess)
             row("Reminders", model.schedule.remindersAccess)
             LabeledContent("GitHub", value: github)
-            LabeledContent("Your agents", value: "Claude Code and Codex sessions on this Mac")
+            LabeledContent("Terminal agents", value: "Lifecycle events from projects you connect below")
             LabeledContent("Connected apps", value: "Your Codex MCP servers, read-only tools only")
         } header: {
             Text("What tilde can see")

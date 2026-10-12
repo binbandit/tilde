@@ -44,6 +44,8 @@ The `~` mark is tilde's face. It breathes when idle, travels while agents work, 
 
 Notifications are only for when you're away (no input for a minute). While you're at the Mac, the Inlet does the talking.
 
+The static `~` in the menu bar opens Settings and offers Quit. Settings isn't hidden behind a right-click on the Inlet. Launch at login is optional and off until you enable it; the setting reflects macOS's registration and approval state.
+
 Motion: the black is drawn from the bezel itself, so it never leaves the screen's edge. Opening, it grows out of the edge and content surfaces in it; closing, content is drawn back into the edge (shrinking, softening, fading) a beat ahead of the black, which lands with a small give, like a drop meeting a surface. One message replaces another by going back in as the next comes out.
 
 ## Answering
