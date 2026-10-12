@@ -19,6 +19,7 @@ struct JobFooter: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            JobApprovalPolicy(job: job)
             if let question = model.question(for: job.id) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(question.question).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.text)
@@ -75,14 +76,14 @@ struct JobFooter: View {
 
     @ViewBuilder private var primary: some View {
         switch job.phase {
-        case .ready where job.isolation != .worktree:
-            // Scratch work has nothing to bring in, and work done in place is in already.
+        case .ready where job.reviewAction == .acknowledge:
+            // A verified no-change result needs acknowledgement, as do scratch and in-place jobs.
             Button("Done") { act { await model.dismiss(job.id) } }
                 .buttonStyle(.pill(Theme.ready, large: true))
                 .keyboardShortcut(.return, modifiers: .command)
         case .ready:
             if let pr = job.pullRequest { PullRequestLink(pr: pr) }
-            if job.isolation == .worktree {
+            if job.reviewAction == .bringIn {
                 Button { act { try await model.land(job.id) } } label: {
                     HStack(spacing: 6) {
                         Text("Bring it in")
@@ -91,6 +92,8 @@ struct JobFooter: View {
                 }
                 .buttonStyle(.pill(Theme.ready, large: true))
                 .keyboardShortcut(.return, modifiers: .command)
+            } else {
+                Meta(text: "Changes have not been verified", color: Theme.amber)
             }
         case .landed:
             if let pr = job.pullRequest { PullRequestLink(pr: pr) }

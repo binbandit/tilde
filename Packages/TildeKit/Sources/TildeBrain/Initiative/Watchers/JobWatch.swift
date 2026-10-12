@@ -13,7 +13,7 @@ enum JobWatch {
                     summary: "\(job.title) (\(job.harness.label)) hasn't made progress in \(Int(idle / 60)) minutes. Last: \(job.ticker).",
                     project: job.repoPath, suggestion: "check on it, nudge it, or move it to another harness")
             }
-            if job.phase == .ready, idle > 2 * 3600 {
+            if job.phase == .ready, job.reviewAction == .bringIn, idle > 2 * 3600 {
                 return Notice(
                     key: "job:\(job.id):unreviewed", subject: "job:\(job.id)", urgency: .fyi,
                     summary: "\(job.title) in \(job.projectName) has been ready for review for \(Int(idle / 3600))h.",

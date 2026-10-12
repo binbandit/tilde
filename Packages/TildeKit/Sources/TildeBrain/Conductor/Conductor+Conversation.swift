@@ -66,20 +66,20 @@ extension Conductor {
                 case .permission: WorkerAnswer.isYes(reply) ? .allow : .deny("\(Owner.firstName) said: \(reply)")
                 case .question: .reply(reply)
                 }
-            resolve(requestID, answer, by: .you)
-            forwarded = true
+            forwarded = resolve(requestID, answer, by: .you)
         }
         if let jobID = item.jobID {
             // An answer that went to the worker sets it going again; any other is tilde's to act on.
+            let stillWaiting = attention.contains { $0.jobID == jobID }
             update(jobID) {
-                guard $0.phase == .needsYou else { return }
-                $0.phase = forwarded ? .working : .deciding
-                if !forwarded { $0.ticker = "Acting on your answer" }
+                guard $0.phase == .needsYou, !forwarded else { return }
+                $0.phase = stillWaiting ? .needsYou : .deciding
+                if !stillWaiting { $0.ticker = "Acting on your answer" }
             }
         }
 
         let job = item.jobID.flatMap { id in jobs.first { $0.id == id } }
-        if always, let job {
+        if always, let job, !item.isApproval || forwarded {
             // "Always" to a rail is kept as exactly that rail in that project, which is all it covers.
             if let asked, case .permission(_, _, let rail) = asked.request.kind {
                 // For a permission, Always means always allow, of exactly that rail in that repo; a no stays a no.
@@ -101,6 +101,21 @@ extension Conductor {
             if !forwarded { record(jobID, .you, .decision, "answered tilde: \(reply)") }
         }
         if let i = thread.firstIndex(where: { $0.attentionID == item.id }) { thread[i].attentionID = nil }
+        if item.isApproval {
+            // A permission click is a control action. The job transcript and task log keep the audit;
+            // ordinary conversation contains neither an "Allow" bubble nor an empty model reply.
+            saveThread()
+            if !forwarded, let jobID = item.jobID {
+                record(jobID, .you, .decision, "Approval \(item.requestID ?? item.id) was not delivered: request no longer available")
+            }
+            Task {
+                await manager.post(.init(
+                    "<approval-decision request=\"\(Self.escape(item.requestID ?? item.id))\" queued-for-worker=\"\(forwarded ? "yes" : "no")\">"
+                        + "\(Self.untrusted(item.question))\nOwner response: \(Self.untrusted(reply))\n</approval-decision>",
+                    jobs: item.jobID.map { [$0] } ?? []))
+            }
+            return
+        }
         // Your answer is a message like any other: tilde reads it and says what happens now. An answer
         // that went straight to an agent usually needs no word, so its reply only appears if there is one.
         let id = IDs.make("t")

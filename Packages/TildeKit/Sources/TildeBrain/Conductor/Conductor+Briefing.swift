@@ -105,7 +105,9 @@ extension Job {
     var digest: String {
         var line = "\(id) \"\(title)\" in \(projectName): \(phase.rawValue)"
         switch phase {
-        case .ready: line += ", ready to review and land since \(updatedAt.formatted(.relative(presentation: .named)))"
+        case .ready:
+            let status = reviewAction == .acknowledge ? "complete, awaiting acknowledgement" : "ready for review"
+            line += ", \(status) since \(updatedAt.formatted(.relative(presentation: .named)))"
         case .landed, .failed, .stopped: line += " \(updatedAt.formatted(.relative(presentation: .named)))"
         default: line += ", \(ticker)"
         }

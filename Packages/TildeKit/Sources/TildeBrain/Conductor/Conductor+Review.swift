@@ -13,6 +13,14 @@ extension Conductor {
     /// Brings the job's branch into the checkout.
     public func land(_ jobID: String) async throws {
         guard let job = jobs.first(where: { $0.id == jobID }) else { return }
+        guard job.reviewAction == .bringIn, let base = job.baseCommit else {
+            throw Git.LandFailure(description: "This job has no verified changes ready to bring in.")
+        }
+        guard try await !Git.checkedDiffStat(workdir: job.workdir, base: base).isEmpty else {
+            update(jobID) { $0.diff = DiffStat(files: 0, insertions: 0, deletions: 0); $0.ticker = "Complete" }
+            throw Git.LandFailure(description: "There are no changes to bring in. Mark the job Done instead.")
+        }
+        guard !Task.isCancelled, self.job(jobID)?.reviewAction == .bringIn else { return }
         await stopWorker(jobID)
         try await Git.land(job)
         await Git.removeWorktree(job, deleteBranch: true)
@@ -45,9 +53,27 @@ extension Conductor {
         return pr
     }
 
-    /// Marks a job that has nothing to land (scratch work) as done.
+    /// Acknowledges a completed result. A worktree is retained for later inspection or discard.
     public func dismiss(_ jobID: String) async {
+        guard let job = job(jobID), job.reviewAction == .acknowledge else { return }
+        if job.isolation == .worktree {
+            do {
+                guard let base = job.baseCommit else { return }
+                let diff = try await Git.checkedDiffStat(workdir: job.workdir, base: base)
+                guard diff.isEmpty else {
+                    update(jobID) { $0.diff = diff; $0.ticker = "Ready for review" }
+                    emit(.trouble("\(job.title) now has changes to review."))
+                    return
+                }
+            } catch {
+                emit(.trouble("Couldn't verify \(job.title)'s completion: \(error)"))
+                return
+            }
+        }
+        guard !Task.isCancelled, self.job(jobID)?.reviewAction == .acknowledge else { return }
         await stopWorker(jobID)
+        guard self.job(jobID)?.reviewAction == .acknowledge else { return }
+        dropAttention(for: jobID)
         update(jobID) { $0.phase = .landed; $0.ticker = "Done" }
         log.append(jobID, "\(Owner.firstName) marked it done")
         record(jobID, .you, .event, "Marked it done")

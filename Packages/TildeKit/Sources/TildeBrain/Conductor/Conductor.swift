@@ -73,6 +73,10 @@ public final class Conductor {
     /// with them, whatever its job says.
     @ObservationIgnored var turnEnded: [String: Date] = [:]
     @ObservationIgnored var handed: [String: Date] = [:]
+    /// Owner opt-in for this worker session only; never restored or model-writable.
+    var automaticApprovalJobs: Set<String> = []
+    /// Successful, current worker turns eligible for the manager to sign off.
+    @ObservationIgnored var successfulTurns: Set<String> = []
     /// What the watchers last saw of your PRs, kept here so a message can take it along without waiting.
     @ObservationIgnored var watching = ""
 
@@ -101,7 +105,11 @@ public final class Conductor {
         transcriptStore = TranscriptStore(folder: home.state.appending(path: "jobs"))
         initiativeEnabled = config.initiative
         (signals, signal) = AsyncStream<Signal>.makeStream(bufferingPolicy: .unbounded)
-        manager = Manager(memory: memory, tools: makeTools(), config: config.manager)
+        manager = Manager(memory: memory, tools: makeTools(), config: config.manager, repositoryPaths: { [weak self] ids in
+            await MainActor.run {
+                ids.compactMap { self?.job($0) }.filter { $0.isolation != .scratch }.map(\.repoPath)
+            }
+        })
         scribe = Scribe(memory: memory, model: config.scribe)
         dreamer = Dreamer(memory: memory, home: home, model: config.dream) { [home, projects, notebook = memory.notebook] day in
             await Evidence.gather(day: day, home: home, notebook: notebook, projects: projects)

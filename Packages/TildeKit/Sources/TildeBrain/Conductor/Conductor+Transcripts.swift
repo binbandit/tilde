@@ -30,13 +30,16 @@ extension Conductor {
     /// Hands words to a job's agent. One that had stopped picks its session back up.
     func deliver(_ text: String, to jobID: String, from: JobEntry.Speaker) async throws {
         guard let job = job(jobID) else { return }
+        successfulTurns.remove(jobID)
+        handed[jobID] = .now
         if let worker = workers[jobID] {
             // The git setup as it stands now (yours to change between turns) is what this turn is held to.
             if job.isolation == .worktree {
                 gitGuards[jobID] = await GitGuard.snapshot(gitDirectory: (job.repoPath as NSString).appendingPathComponent(".git"))
             }
-            try await worker.steer(text)
-            handed[jobID] = .now
+            let brief = job.isolation == .scratch ? text
+                : try RepositoryInstructions.workerBrief(text, repository: job.repoPath, workdir: job.workdir)
+            try await worker.steer(brief)
         } else {
             try await spawn(job, brief: text, resume: job.sessionID != nil)
         }

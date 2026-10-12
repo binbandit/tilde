@@ -52,6 +52,18 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
     public var createdAt: Date
     public var updatedAt: Date
 
+    /// The primary review action is based on observed changes, never a model's summary.
+    public enum ReviewAction: Sendable {
+        case bringIn, acknowledge, unavailable
+    }
+
+    public var reviewAction: ReviewAction {
+        guard phase == .ready else { return .unavailable }
+        guard isolation == .worktree else { return .acknowledge }
+        guard let diff else { return .unavailable }
+        return diff.isEmpty ? .acknowledge : .bringIn
+    }
+
     public init(
         id: String, title: String, brief: String, projectName: String, repoPath: String, workdir: String,
         harness: Harness, isolation: Isolation
