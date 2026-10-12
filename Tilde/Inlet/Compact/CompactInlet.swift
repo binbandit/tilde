@@ -6,30 +6,41 @@ import TildeKit
 struct CompactInlet: View {
     @Environment(AppModel.self) private var model
     var placement: InletPlacement
+    var preferences: InletPreferences
 
     var body: some View {
-        switch (placement.edge, placement.notch) {
-        case (.top, let notch?):
-            HStack(spacing: 0) {
-                TildeMark(mood: mood, size: 18).frame(width: Inlet.wing)
-                Color.clear.frame(width: notch.width)
-                dots.frame(width: Inlet.wing)
+        if preferences.confinesRestingInlet(edge: placement.edge, notch: placement.notch), let notch = placement.notch {
+            // The physical camera covers this space. No wings or hidden controls extend beyond it.
+            Color.clear.frame(width: notch.width, height: notch.height)
+        } else {
+            switch (placement.edge, placement.notch) {
+            case (.top, let notch?):
+                HStack(spacing: 0) {
+                    Group {
+                        if !preferences.hideMark { TildeMark(mood: mood, size: 18) }
+                        else { Color.clear }
+                    }
+                    .frame(width: Inlet.wing)
+                    Color.clear.frame(width: notch.width)
+                    dots.frame(width: Inlet.wing)
+                }
+                .frame(height: notch.height)
+            case (.top, nil):
+                HStack(spacing: 12) {
+                    if !preferences.hideMark { TildeMark(mood: mood, size: 18) }
+                    if !model.crew.isEmpty { dots }
+                }
+                .padding(.horizontal, 15)
+                .frame(height: placement.menuBar)
+            case (let edge, _):
+                VStack(spacing: 14) {
+                    if !preferences.hideMark { TildeMark(mood: mood, size: 20) }
+                    dots
+                }
+                .frame(width: Inlet.pill.width, height: Inlet.pill.height)
+                // Optically centred: the ears make the bezel side look heavier.
+                .offset(x: edge == .left ? 2 : -2)
             }
-        case (.top, nil):
-            HStack(spacing: 12) {
-                TildeMark(mood: mood, size: 18)
-                if !model.crew.isEmpty { dots }
-            }
-            .padding(.horizontal, 15)
-            .frame(maxHeight: .infinity)
-        case (let edge, _):
-            VStack(spacing: 14) {
-                TildeMark(mood: mood, size: 20)
-                dots
-            }
-            .frame(width: Inlet.pill.width, height: Inlet.pill.height)
-            // Optically centred: the ears make the bezel side look heavier.
-            .offset(x: edge == .left ? 2 : -2)
         }
     }
 

@@ -5,7 +5,7 @@ import Foundation
 ///
 /// Terminals don't expose their tabs' working directories, but their shells
 /// are child processes and libproc can read any of our own user's processes.
-enum Shells {
+nonisolated enum Shells {
     private static let names: Set<String> = ["zsh", "bash", "fish", "nu", "sh", "xonsh", "elvish", "tcsh"]
 
     /// The best guess at the working directory of the terminal's front tab:

@@ -22,10 +22,12 @@ struct InletView: View {
     private var look: Look { inlet.look(busy: !model.crew.isEmpty || !model.attention.isEmpty) }
 
     private var placement: InletPlacement { inlet.placement }
+    private var geometry: InletGeometry { placement.geometry }
 
     var body: some View {
         let shape = inlet.shape(for: look)
         let anchor = placement.edge.anchor
+        let confined = look.isTucked && inlet.preferences.confinesRestingInlet(edge: placement.edge, notch: placement.notch)
         ZStack {
             shape.fill(Theme.ink)
             BezelLayout(edge: placement.edge) {
@@ -36,7 +38,7 @@ struct InletView: View {
         .contentShape(shape)
         // Landing back in the bezel, it gives like a drop meeting the surface.
         .keyframeAnimator(initialValue: 1.0, trigger: landings) { view, scale in
-            view.scaleEffect(scale, anchor: anchor)
+            view.scaleEffect(confined ? 1 : scale, anchor: anchor)
         } keyframes: { _ in
             LinearKeyframe(1.0, duration: 0.26)
             SpringKeyframe(1.08, duration: 0.12, spring: .snappy)
@@ -62,30 +64,26 @@ struct InletView: View {
 
     /// Room around open content: a little extra on the bezel side, where the
     /// ears make the edge feel closer, and on top, clear of the camera housing.
-    private var insets: EdgeInsets {
-        switch placement.edge {
-        case .right: EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 22)
-        case .left: EdgeInsets(top: 18, leading: 22, bottom: 18, trailing: 20)
-        case .top: EdgeInsets(top: placement.notch.map { $0.height + 12 } ?? 18, leading: 21, bottom: 20, trailing: 21)
-        }
+    private func insets(for size: CGSize) -> EdgeInsets {
+        let padding = geometry.padding(in: size)
+        return EdgeInsets(top: padding.top, leading: padding.leading, bottom: padding.bottom, trailing: padding.trailing)
     }
-
-    /// The tallest the conversation gets before it scrolls.
-    private var maxThread: CGFloat { (placement.frame.height * 0.62).rounded() }
 
     @ViewBuilder private var content: some View {
         switch look {
         case .dormant:
             EmptyView()
         case .compact:
-            CompactInlet(placement: placement)
+            CompactInlet(placement: placement, preferences: inlet.preferences)
                 .measured { inlet.measured[.compact] = $0 }
                 .transition(.opacity.combined(with: .scale(scale: 0.8, anchor: placement.edge.anchor)))
         case .peek:
             if case .peek(let id) = inlet.mode {
-                PeekView(messageID: id, actions: actions)
-                    .padding(insets)
-                    .frame(width: 380)
+                BoundedInletContent(maxHeight: geometry.contentHeight(in: geometry.peekSize)) {
+                    PeekView(messageID: id, actions: actions)
+                }
+                    .padding(insets(for: geometry.peekSize))
+                    .frame(width: geometry.peekSize.width)
                     .fixedSize(horizontal: false, vertical: true)
                     .measured { inlet.measured[.peek] = $0 }
                     // One message goes back in as the next comes out, never the two on top of each other.
@@ -93,23 +91,43 @@ struct InletView: View {
                     .transition(appear)
             }
         case .conversation:
-            ConversationView(referent: referent, maxThread: maxThread, actions: actions)
-                .padding(insets)
-                .frame(width: 400)
+            ConversationView(referent: referent, maxHeight: geometry.contentHeight(in: geometry.conversationSize), actions: actions)
+                .padding(insets(for: geometry.conversationSize))
+                .frame(width: geometry.conversationSize.width)
                 .fixedSize(horizontal: false, vertical: true)
                 .measured { inlet.measured[.conversation] = $0 }
                 .transition(appear)
         case .job:
             if case .job(let id) = inlet.mode, let job = model.job(id) {
-                JobView(job: job, height: min(860, placement.frame.height * 0.84), onClose: actions.dismiss)
+                JobView(job: job, width: geometry.jobSize.width, height: geometry.jobContentHeight, onClose: actions.dismiss)
                     // Each job opens fresh, on the tab its state calls for.
                     .id(job.id)
-                    .padding(.top, placement.notch?.height ?? 0)
+                    .padding(.top, geometry.jobTopPadding)
                     .fixedSize(horizontal: false, vertical: true)
                     .measured { inlet.measured[.job] = $0 }
                     .transition(appear)
             }
         }
+    }
+}
+
+/// Peeks usually hug one message. A long message or a short display can scroll every
+/// part of the peek, including question buttons, inside the same total height budget.
+private struct BoundedInletContent<Content: View>: View {
+    var maxHeight: CGFloat
+    @ViewBuilder var content: () -> Content
+    @State private var contentHeight: CGFloat = 0
+
+    var body: some View {
+        ScrollView {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0.rounded(.up) }
+        }
+        .scrollIndicators(.never)
+        .scrollDisabled(contentHeight <= maxHeight)
+        .frame(height: min(contentHeight, maxHeight))
     }
 }
 
@@ -131,6 +149,10 @@ struct InletActions {
     var dismiss: () -> Void
     /// Leave out what you were pointing at.
     var unpoint: () -> Void = {}
+    /// Tuck the conversation away while keeping its unsent draft.
+    var minimize: () -> Void = {}
+    /// A question answer was sent directly to the model; apply the same send behavior.
+    var submitted: () -> Void = {}
 }
 
 /// Leaving, content is drawn into the point it collapses to: it shrinks toward it, softens

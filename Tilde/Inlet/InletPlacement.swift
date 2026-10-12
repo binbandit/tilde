@@ -1,24 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Which edge of the display the Inlet sinks into. Settings keep one choice
-/// for the built-in display and one for external displays.
-nonisolated enum InletEdge: String, CaseIterable, Identifiable {
-    case right, left, top
-
-    static let builtInKey = "inletEdge.builtIn"
-    static let externalKey = "inletEdge.external"
-
-    var id: Self { self }
-
-    var label: String {
-        switch self {
-        case .right: "Right edge"
-        case .left: "Left edge"
-        case .top: "Top"
-        }
-    }
-
+nonisolated extension InletEdge {
     /// Where the shape sits in its panel: flush with the bezel.
     var alignment: Alignment {
         switch self {
@@ -84,9 +67,7 @@ struct InletPlacement: Equatable {
     /// fixed strip along the edge, wide enough for the review.
     var frame: CGRect = .zero
 
-    /// Across the edge for the sides, along it for the top: room for the
-    /// widest look (the review) and its ears.
-    private static let span: CGFloat = 900
+    var geometry: InletGeometry { InletGeometry(edge: edge, panelSize: frame.size, notch: notch) }
 
     init() {}
 
@@ -100,20 +81,7 @@ struct InletPlacement: Equatable {
             // A pretend notch is a 14-inch MacBook Pro's, near enough.
             notch = screen.notch?.size ?? (simulatesNotch ? CGSize(width: 190, height: 32) : nil)
         }
-        // A Dock on a side edge owns it, so the Inlet sits against the Dock
-        // instead. An auto-hidden Dock only reserves a few points.
-        switch edge {
-        case .right:
-            let bezel = full.maxX - visible.maxX > 8 ? visible.maxX : full.maxX
-            frame = CGRect(x: bezel - Self.span, y: visible.minY, width: Self.span, height: visible.height)
-        case .left:
-            let bezel = visible.minX - full.minX > 8 ? visible.minX : full.minX
-            frame = CGRect(x: bezel, y: visible.minY, width: Self.span, height: visible.height)
-        case .top:
-            let center = screen.notch?.midX ?? full.midX
-            frame = CGRect(x: center - Self.span / 2, y: visible.minY, width: Self.span, height: full.maxY - visible.minY)
-        }
-        frame = NSIntegralRectWithOptions(frame, .alignAllEdgesNearest)
+        frame = InletGeometry.panelFrame(edge: edge, full: full, visible: visible, notchCenterX: screen.notch?.midX)
     }
 
     /// The display the Inlet lives on: the one picked in Settings while it's
