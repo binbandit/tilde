@@ -233,8 +233,13 @@ private actor InstructionWorker: Worker {
         self.log = log
         (events, emit) = AsyncStream.makeStream()
     }
-    func start(brief: String) { log.briefs.withLock { $0.append(brief) } }
-    func steer(_ text: String) {}
+    func start(brief: String, submission: UUID?) {
+        if let submission { emit.yield(.submitted(submission)) }
+        log.briefs.withLock { $0.append(brief) }
+    }
+    func steer(_ text: String, submission: UUID?) {
+        if let submission { emit.yield(.submitted(submission)) }
+    }
     func resolve(_ requestID: String, _ answer: WorkerAnswer) {}
     func stop() { emit.finish() }
 }

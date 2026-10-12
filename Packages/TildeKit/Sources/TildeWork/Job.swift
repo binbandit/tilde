@@ -47,6 +47,8 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
     /// The manager's sign-off, or the worker's last word.
     public var summary: String?
     public var diff: DiffStat?
+    /// An acknowledged result may retain its worktree; actual landing never sets this.
+    public var acknowledgedAt: Date?
     /// The pull request for this job's branch, once there is one.
     public var pullRequest: PullRequest?
     public var createdAt: Date
@@ -66,7 +68,7 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
 
     /// Acknowledging a no-change worktree retains it, so explicit cleanup remains available.
     public var canDiscard: Bool {
-        !phase.isActive && isolation != .inPlace && (phase != .landed || isolation == .worktree)
+        !phase.isActive && isolation != .inPlace && (phase != .landed || (isolation == .worktree && acknowledgedAt != nil))
     }
 
     public init(

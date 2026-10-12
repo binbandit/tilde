@@ -19,6 +19,7 @@ struct AmpDialect: StreamDialect {
     /// An inference error ends Amp's run with an error result, and the process with it.
     let exitsOnFailure = true
     let briefInPrompt = true
+    let serializesPrompts = true
 
     /// Amp's tools that run commands or change files.
     static let gated = ["Bash", "shell_command", "create_file", "edit_file", "apply_patch", "delete_file", "undo_edit"]
@@ -86,7 +87,9 @@ struct AmpDialect: StreamDialect {
             }
             return signals
         case "result":
-            guard line["is_error"]?.bool == true else { return [.turnEnded(ok: true)] }
+            // Long-lived stdin sessions end each prompt on assistant/end_turn. A success
+            // result is the run summary (often only at EOF), never a second turn boundary.
+            guard line["is_error"]?.bool == true else { return [] }
             return [.failure(line["error"]?.string ?? "Amp stopped with an error."), .turnEnded(ok: false)]
         default:
             return []

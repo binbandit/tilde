@@ -8,11 +8,13 @@ import WorkerKit
 /// carrying decisions back to them.
 extension Conductor {
     /// Starts `job`'s worker. `resume` reopens its session instead of starting a new one.
-    func spawn(_ job: Job, brief: String, resume: Bool) async throws {
+    func spawn(_ job: Job, brief: String, resume: Bool, submission: UUID? = nil) async throws {
+        let submission = submission ?? beginSubmission(job.id)
+        let generation = UUID()
+        workerGenerations[job.id] = generation
         automaticApprovalJobs.remove(job.id)
         successfulTurns.remove(job.id)
         turnEnded.removeValue(forKey: job.id)
-        handed[job.id] = .now
         guard let spec = job.harness.spec else { throw UnknownHarness(harness: job.harness) }
         let brief = try job.isolation == .scratch ? brief
             : RepositoryInstructions.workerBrief(brief, repository: job.repoPath, workdir: job.workdir)
@@ -20,6 +22,8 @@ extension Conductor {
         let writable = job.isolation == .worktree ? [(job.repoPath as NSString).appendingPathComponent(".git")] : []
         // What in that git directory makes git run code is noted now, and put back if a turn changes it.
         if let git = writable.first { gitGuards[job.id] = await GitGuard.snapshot(gitDirectory: git) }
+        guard !Task.isCancelled, workerGenerations[job.id] == generation,
+            expectedSubmissions[job.id] == submission else { throw DeliveryInterrupted() }
         let place: Supervision.Place =
             switch job.isolation {
             case .worktree: .worktree
@@ -30,6 +34,7 @@ extension Conductor {
             workdir: job.workdir, sessionID: job.sessionID, resume: resume, model: job.model,
             instructions: Supervision.brief(owner: Owner.firstName, place: place), writable: writable))
         workers[job.id] = worker
+        update(job.id) { $0.phase = .working; $0.ticker = resume ? "Resuming" : "Starting" }
         Task { [weak self] in
             for await event in worker.events {
                 // A worker since stopped or replaced no longer speaks for its job (its late exit mustn't
@@ -38,21 +43,45 @@ extension Conductor {
                 self.handle(event, from: job.id)
             }
         }
-        try await worker.start(brief: brief)
+        do {
+            try await worker.start(brief: brief, submission: submission)
+            guard !Task.isCancelled, workerGenerations[job.id] == generation,
+                workers[job.id].map({ $0 === worker }) == true else { throw DeliveryInterrupted() }
+            acceptSubmission(submission, for: job.id)
+        } catch {
+            if workers[job.id].map({ $0 === worker }) == true {
+                let stopped = await stopWorker(job.id)
+                if workerGenerations[job.id] == stopped {
+                    update(job.id) { $0.phase = .failed; $0.ticker = "Worker couldn't start" }
+                }
+            } else {
+                await worker.stop()
+            }
+            throw error
+        }
     }
 
     /// Stops a job's worker; what it was waiting on goes with it.
-    func stopWorker(_ id: String) async {
+    @discardableResult
+    func stopWorker(_ id: String) async -> UUID {
+        let generation = UUID()
+        workerGenerations[id] = generation
+        expectedSubmissions[id] = nil
+        acceptedSubmissions[id] = nil
+        pendingCompletions[id] = nil
         automaticApprovalJobs.remove(id)
         successfulTurns.remove(id)
         turnEnded.removeValue(forKey: id)
         for (request, pending) in requests where pending.job == id { requests.removeValue(forKey: request) }
         for item in attention where item.jobID == id && item.requestID != nil { withdraw(item.id, because: "the agent stopped") }
         await workers.removeValue(forKey: id)?.stop()
+        return generation
     }
 
     private func handle(_ event: WorkerEvent, from jobID: String) {
         switch event {
+        case .submitted(let submission):
+            observedSubmissions[jobID] = submission
         case .session(let id):
             update(jobID) { $0.sessionID = id }
         case .activity(let text):
@@ -82,10 +111,14 @@ extension Conductor {
             let standing = { if case .permission(_, _, .some) = request.kind { true } else { false } }() && unallowedRail(request, job: jobID) == nil
             Task { await manager.post(.init(Self.describe(request, job: jobID, standing: standing), jobs: [jobID])) }
         case .turnEnded(let ok, let text):
-            guard let job = jobs.first(where: { $0.id == jobID }), job.phase.isActive else { return }
             automaticApprovalJobs.remove(jobID)
+            guard let job = jobs.first(where: { $0.id == jobID }), job.phase.isActive,
+                let submission = expectedSubmissions[jobID], observedSubmissions[jobID] == submission else { return }
+            guard acceptedSubmissions[jobID] == submission else {
+                pendingCompletions[jobID] = (submission, event)
+                return
+            }
             let ended = Date.now
-            let currentDelivery = deliveriesInFlight[jobID, default: 0] == 0
             turnEnded[jobID] = ended
             successfulTurns.remove(jobID)
             Task {
@@ -99,7 +132,7 @@ extension Conductor {
                 var diff: DiffStat?
                 if let base = job.baseCommit { diff = try? await Git.checkedDiffStat(workdir: job.workdir, base: base) }
                 // Stopped (or taken over) while that was being worked out: it stays that way.
-                guard currentDelivery, deliveriesInFlight[jobID, default: 0] == 0,
+                guard expectedSubmissions[jobID] == submission, acceptedSubmissions[jobID] == submission,
                     self.job(jobID)?.phase.isActive == true, turnEnded[jobID] == ended,
                     (handed[jobID] ?? .distantPast) <= ended else { return }
                 if ok { successfulTurns.insert(jobID) }
@@ -117,6 +150,10 @@ extension Conductor {
                     """, jobs: [jobID]))
             }
         case .exited(let detail):
+            workerGenerations[jobID] = UUID()
+            expectedSubmissions[jobID] = nil
+            acceptedSubmissions[jobID] = nil
+            pendingCompletions[jobID] = nil
             automaticApprovalJobs.remove(jobID)
             workers.removeValue(forKey: jobID)
             for (id, pending) in requests where pending.job == jobID { requests.removeValue(forKey: id) }
@@ -131,6 +168,30 @@ extension Conductor {
                 await manager.post(.init(
                     "<worker-stopped job=\"\(jobID)\">\(detail ?? "The worker exited.")</worker-stopped>", jobs: [jobID]))
             }
+        }
+    }
+
+    /// Invalidates old completion before any suspended preparation of the next message.
+    func beginSubmission(_ jobID: String) -> UUID {
+        let submission = UUID()
+        automaticApprovalJobs.remove(jobID)
+        if job(jobID)?.acknowledgedAt != nil { update(jobID) { $0.acknowledgedAt = nil } }
+        expectedSubmissions[jobID] = submission
+        acceptedSubmissions[jobID] = nil
+        pendingCompletions[jobID] = nil
+        successfulTurns.remove(jobID)
+        turnEnded[jobID] = nil
+        handed[jobID] = .now
+        return submission
+    }
+
+    /// A completion can arrive before the adapter's send RPC returns. It becomes eligible only
+    /// after that submission was accepted, with its marker observed on the same ordered stream.
+    func acceptSubmission(_ submission: UUID, for jobID: String) {
+        guard expectedSubmissions[jobID] == submission else { return }
+        acceptedSubmissions[jobID] = submission
+        if let pending = pendingCompletions.removeValue(forKey: jobID), pending.submission == submission {
+            handle(pending.event, from: jobID)
         }
     }
 

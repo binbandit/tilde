@@ -24,7 +24,7 @@ extension Conductor {
         await stopWorker(jobID)
         try await Git.land(job)
         await Git.removeWorktree(job, deleteBranch: true)
-        update(jobID) { $0.phase = .landed; $0.ticker = "Landed" }
+        update(jobID) { $0.phase = .landed; $0.ticker = "Landed"; $0.acknowledgedAt = nil }
         log.append(jobID, "Landed into \(job.projectName)")
         record(jobID, .you, .event, "Brought it into \(job.baseBranch ?? job.projectName)")
         log.journal("Landed \(job.title) in \(job.projectName)")
@@ -33,15 +33,29 @@ extension Conductor {
     }
 
     public func discard(_ jobID: String) async {
-        guard let job = jobs.first(where: { $0.id == jobID }) else { return }
-        await stopWorker(jobID)
+        guard let job = jobs.first(where: { $0.id == jobID }), job.canDiscard, ownsWorktree(job) else { return }
+        let stopped = await stopWorker(jobID)
+        guard workerGenerations[jobID] == stopped, ownsWorktree(job) else { return }
         await Git.removeWorktree(job, deleteBranch: true)
         dropAttention(for: jobID)
-        update(jobID) { $0.phase = .stopped; $0.ticker = "Discarded" }
+        update(jobID) { $0.phase = .stopped; $0.ticker = "Discarded"; $0.acknowledgedAt = nil }
         log.append(jobID, "Discarded by \(Owner.firstName)")
         record(jobID, .you, .event, "Discarded")
         await memory.notebook.commitChanges(context: "discarded \(jobID)")
         Task { await manager.post(.init("<worker-stopped job=\"\(jobID)\">\(Owner.firstName) discarded this job.</worker-stopped>", jobs: [jobID])) }
+    }
+
+    /// Branch names and worktree paths can be reused after removal. An older card never owns
+    /// a directory or branch now assigned to a newer job, even if its old path exists again.
+    private func ownsWorktree(_ job: Job) -> Bool {
+        let workdir = URL(fileURLWithPath: job.workdir).standardizedFileURL.resolvingSymlinksInPath()
+        let repo = URL(fileURLWithPath: job.repoPath).standardizedFileURL.resolvingSymlinksInPath()
+        return !jobs.contains { other in
+            guard other.id != job.id, other.createdAt >= job.createdAt else { return false }
+            return URL(fileURLWithPath: other.workdir).standardizedFileURL.resolvingSymlinksInPath() == workdir
+                || (job.branch != nil && other.branch == job.branch
+                    && URL(fileURLWithPath: other.repoPath).standardizedFileURL.resolvingSymlinksInPath() == repo)
+        }
     }
 
     /// Looks up the job's pull request on GitHub and remembers it.
@@ -74,7 +88,7 @@ extension Conductor {
         await stopWorker(jobID)
         guard self.job(jobID)?.reviewAction == .acknowledge else { return }
         dropAttention(for: jobID)
-        update(jobID) { $0.phase = .landed; $0.ticker = "Done" }
+        update(jobID) { $0.phase = .landed; $0.ticker = "Done"; $0.acknowledgedAt = .now }
         log.append(jobID, "\(Owner.firstName) marked it done")
         record(jobID, .you, .event, "Marked it done")
         await memory.notebook.commitChanges(context: "\(jobID) done")

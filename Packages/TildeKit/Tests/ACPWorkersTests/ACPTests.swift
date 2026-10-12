@@ -98,6 +98,25 @@ import WorkerKit
         await worker.stop()
     }
 
+    @Test func submissionMarkersPrecedeQueuedAndIdlePrompts() async throws {
+        let agent = try FakeAgent()
+        let worker = agent.worker()
+        var events = EventLines(worker)
+        let first = UUID(), queued = UUID(), idle = UUID()
+        try await worker.start(brief: "hold", submission: first)
+        #expect(await events.until { if case .submitted = $0 { true } else { false } } == [
+            "session sess-1", "submitted \(first)",
+        ])
+        let hold = await events.nextRequest()
+        try await worker.steer("follow up", submission: queued)
+        #expect(await events.until { if case .submitted = $0 { true } else { false } } == ["submitted \(queued)"])
+        await worker.resolve(hold.id, .allow)
+        #expect(await events.untilTurnEnds() == ["message held", "message echo: follow up", "turn ok echo: follow up"])
+        try await worker.steer("again", submission: idle)
+        #expect(await events.untilTurnEnds() == ["submitted \(idle)", "message echo: again", "turn ok echo: again"])
+        await worker.stop()
+    }
+
     @Test func stopCancelsPendingRequestsThenEndsTheProcess() async throws {
         let agent = try FakeAgent()
         let worker = agent.worker()
@@ -328,6 +347,7 @@ private struct EventLines {
 extension WorkerEvent {
     fileprivate var line: String {
         switch self {
+        case .submitted(let id): "submitted \(id)"
         case .session(let id): "session \(id)"
         case .activity(let text): "activity \(text)"
         case .message(let text): "message \(text)"

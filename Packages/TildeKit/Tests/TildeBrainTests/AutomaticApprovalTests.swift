@@ -12,8 +12,12 @@ private actor ApprovalWorker: Worker {
     private(set) var answers: [WorkerAnswer] = []
 
     init() { (events, emit) = AsyncStream.makeStream() }
-    func start(brief: String) async throws {}
-    func steer(_ text: String) async throws {}
+    func start(brief: String, submission: UUID?) async throws {
+        if let submission { emit.yield(.submitted(submission)) }
+    }
+    func steer(_ text: String, submission: UUID?) async throws {
+        if let submission { emit.yield(.submitted(submission)) }
+    }
     func resolve(_ requestID: String, _ answer: WorkerAnswer) { answers.append(answer) }
     func stop() async { emit.finish() }
     func request(_ request: WorkerRequest) { emit.yield(.request(request)) }

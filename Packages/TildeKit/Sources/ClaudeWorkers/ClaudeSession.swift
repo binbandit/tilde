@@ -3,6 +3,7 @@ import TildeSupport
 
 public enum ClaudeEvent: Sendable {
     case ready(sessionID: String, model: String)
+    case submitted(UUID)
     /// Streaming assistant text from the main conversation (not subagents).
     case textDelta(String)
     case text(String)
@@ -68,14 +69,23 @@ public actor ClaudeSession {
     }
 
     /// Sends a user turn. Claude queues it if a turn is already running.
-    public func send(_ text: String) throws {
+    public func send(_ text: String, submission: UUID? = nil) throws {
+        try Task.checkCancellation()
+        guard isRunning else { throw ChildProcess.Failure.stdinClosed }
         let id = UUID().uuidString.lowercased()
         sent.insert(id)
         waitingOn.append(id)
-        try write([
-            "type": "user", "uuid": .string(id), "session_id": "",
-            "message": ["role": "user", "content": .string(text)], "parent_tool_use_id": nil,
-        ])
+        if let submission { emit.yield(.submitted(submission)) }
+        do {
+            try write([
+                "type": "user", "uuid": .string(id), "session_id": "",
+                "message": ["role": "user", "content": .string(text)], "parent_tool_use_id": nil,
+            ])
+        } catch {
+            sent.remove(id)
+            waitingOn.removeAll { $0 == id }
+            throw error
+        }
     }
 
     /// Stops the current turn without ending the session.

@@ -77,8 +77,15 @@ public final class Conductor {
     var automaticApprovalJobs: Set<String> = []
     /// Successful, current worker turns eligible for the manager to sign off.
     @ObservationIgnored var successfulTurns: Set<String> = []
-    /// A turn that ends while newer words are being handed over cannot sign off those words.
+    /// Submission markers share the worker event stream, so buffered old completions cannot
+    /// be mistaken for a newer message, even when a send RPC returns after its completion.
     @ObservationIgnored var deliveriesInFlight: [String: Int] = [:]
+    @ObservationIgnored var expectedSubmissions: [String: UUID] = [:]
+    @ObservationIgnored var observedSubmissions: [String: UUID] = [:]
+    @ObservationIgnored var acceptedSubmissions: [String: UUID] = [:]
+    @ObservationIgnored var pendingCompletions: [String: (submission: UUID, event: WorkerEvent)] = [:]
+    /// Invalidates launch preparation as well as already registered workers when Stop wins.
+    @ObservationIgnored var workerGenerations: [String: UUID] = [:]
     /// What the watchers last saw of your PRs, kept here so a message can take it along without waiting.
     @ObservationIgnored var watching = ""
 

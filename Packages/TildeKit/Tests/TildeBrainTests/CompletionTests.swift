@@ -48,6 +48,36 @@ import WorkerKit
         #expect(conductor.job(job.id)?.ticker == "Discarded")
     }
 
+    @Test(arguments: [false, true])
+    func oldCompletionCannotDiscardAReusedWorktree(acknowledged: Bool) async throws {
+        let fixture = ConductorTests()
+        let (conductor, job) = try await readyToFinish(fixture)
+        if acknowledged {
+            _ = await fixture.call(conductor, "finish", ["job": .string(job.id)])
+            await conductor.dismiss(job.id)
+            #expect(conductor.job(job.id)?.canDiscard == true)
+            await Git.removeWorktree(job, deleteBranch: true)
+        } else {
+            try "change".write(toFile: job.workdir + "/change.txt", atomically: true, encoding: .utf8)
+            _ = await fixture.call(conductor, "finish", ["job": .string(job.id)])
+            conductor.update(job.id) { $0.acknowledgedAt = .now }
+            try await conductor.land(job.id)
+            #expect(conductor.job(job.id)?.acknowledgedAt == nil)
+            #expect(conductor.job(job.id)?.canDiscard == false)
+        }
+        _ = try await Git.addWorktree(repo: fixture.repo, path: job.workdir, branch: "tilde/result")
+        var replacement = Job(id: "replacement", title: job.title, brief: "New task", projectName: "app",
+                              repoPath: fixture.repo, workdir: job.workdir, harness: .claude, isolation: .worktree)
+        replacement.branch = "tilde/result"
+        replacement.phase = .working
+        conductor.addJob(replacement)
+        try "keep".write(toFile: job.workdir + "/replacement.txt", atomically: true, encoding: .utf8)
+        await conductor.discard(job.id)
+        #expect(FileManager.default.fileExists(atPath: job.workdir + "/replacement.txt"))
+        #expect(conductor.job(replacement.id)?.phase == .working)
+        #expect(try await Git.currentBranch(job.workdir) == "tilde/result")
+    }
+
     @Test func untrackedAndStagedChangesRequireDeliveryReview() async throws {
         let fixture = ConductorTests()
         let (conductor, job) = try await readyToFinish(fixture)
@@ -124,8 +154,12 @@ private actor CompletionWorker: Worker {
     nonisolated let events: AsyncStream<WorkerEvent>
     private let emit: AsyncStream<WorkerEvent>.Continuation
     init() { (events, emit) = AsyncStream.makeStream() }
-    func start(brief: String) async throws {}
-    func steer(_ text: String) async throws {}
+    func start(brief: String, submission: UUID?) async throws {
+        if let submission { emit.yield(.submitted(submission)) }
+    }
+    func steer(_ text: String, submission: UUID?) async throws {
+        if let submission { emit.yield(.submitted(submission)) }
+    }
     func resolve(_ requestID: String, _ answer: WorkerAnswer) {}
     func stop() async {}
     func end(ok: Bool) { emit.yield(.turnEnded(ok: ok, text: ok ? "Research complete" : "Failed")) }

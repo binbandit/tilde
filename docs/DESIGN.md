@@ -80,7 +80,7 @@ Only the actions that fit where the job is:
 | Working or waiting | Stop (in the field), take over, open in your editor |
 | Ready | Discard, take over, open in your editor, open its PR once there is one, **bring it in** (⌘↩); verified no-change results, work done in place, and scratch work are **Done** |
 | Stopped or failed | Discard, take over, open in your editor, or tell it how to carry on |
-| Landed | Open its PR |
+| Landed or acknowledged | Open its PR; inspect or discard a retained no-change worktree |
 
 - **Bring it in**: rebase onto your current branch and fast-forward your checkout (never into a dirty tree).
 - **Done**: acknowledges the completed result without landing a branch. For no-change worktrees, the worktree remains available for inspection or explicit discard.

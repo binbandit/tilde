@@ -3,6 +3,7 @@ import TildeSupport
 import WorkerKit
 
 public enum CodexEvent: Sendable {
+    case submitted(UUID)
     case turnStarted(id: String)
     case textDelta(String)
     /// A complete agent message.
@@ -27,6 +28,8 @@ public actor CodexSession {
     private var pending: [Int: CheckedContinuation<Result<JSON, Failure>, Never>] = [:]
     public private(set) var threadID: String?
     public private(set) var activeTurn: String?
+    /// Notifications can complete a turn before the turn/start RPC reply reaches us.
+    private var turnStateRevision = 0
     /// When Codex last said anything at all.
     public private(set) var lastHeard = Date.now
     /// Tool calls, commands and the like in flight: while one runs, quiet is expected.
@@ -98,9 +101,12 @@ public actor CodexSession {
     }
 
     /// Starts a turn, or steers the one in progress.
-    public func send(_ text: String, effort: String? = nil, outputSchema: JSON? = nil) async throws {
+    public func send(_ text: String, effort: String? = nil, outputSchema: JSON? = nil, submission: UUID? = nil) async throws {
+        try Task.checkCancellation()
         guard let threadID else { throw Failure(description: "No Codex thread") }
+        guard isRunning else { throw Failure(description: "Codex isn't running") }
         let input: JSON = [["type": "text", "text": .string(text), "text_elements": []]]
+        if let submission { emit.yield(.submitted(submission)) }
         if let activeTurn {
             _ = try await request("turn/steer", ["threadId": .string(threadID), "expectedTurnId": .string(activeTurn), "input": input])
             return
@@ -108,8 +114,9 @@ public actor CodexSession {
         var params: [String: JSON] = ["threadId": .string(threadID), "input": input]
         if let effort { params["effort"] = .string(effort) }
         if let outputSchema { params["outputSchema"] = outputSchema }
+        let revision = turnStateRevision
         let result = try await request("turn/start", .object(params))
-        activeTurn = result["turn"]?["id"]?.string
+        if revision == turnStateRevision { activeTurn = result["turn"]?["id"]?.string }
     }
 
     /// The effective configuration this process loaded (`config.toml` plus overrides).
@@ -200,6 +207,7 @@ public actor CodexSession {
         let params = message["params"] ?? [:]
         switch method {
         case "turn/started":
+            turnStateRevision &+= 1
             activeTurn = params["turn"]?["id"]?.string ?? activeTurn
             working = []
             turnError = nil
@@ -216,6 +224,7 @@ public actor CodexSession {
                 emit.yield(.message(text))
             }
         case "turn/completed":
+            turnStateRevision &+= 1
             activeTurn = nil
             working = []
             let turn = params["turn"]

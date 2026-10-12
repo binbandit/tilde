@@ -31,22 +31,22 @@ public actor ClaudeWorker: Worker, ClaudeHost {
         (events, emit) = AsyncStream<WorkerEvent>.makeStream(bufferingPolicy: .unbounded)
     }
 
-    public func start(brief: String) async throws {
+    public func start(brief: String, submission: UUID?) async throws {
         let session = ClaudeSession(launch, host: self)
         self.session = session
         Task { await self.relay(session) }
         try await session.start()
-        try await session.send(brief)
+        try await session.send(brief, submission: submission)
     }
 
-    public func steer(_ text: String) async throws {
+    public func steer(_ text: String, submission: UUID?) async throws {
         guard let session, await session.isRunning else {
             // The process ended (crash, restart): pick the conversation back up.
             launch.resume = true
-            try await start(brief: text)
+            try await start(brief: text, submission: submission)
             return
         }
-        try await session.send(text)
+        try await session.send(text, submission: submission)
     }
 
     public func resolve(_ requestID: String, _ answer: WorkerAnswer) {
@@ -112,7 +112,9 @@ public actor ClaudeWorker: Worker, ClaudeHost {
 
     private func relay(_ session: ClaudeSession) async {
         for await event in session.events {
+            guard session === self.session else { continue }
             switch event {
+            case .submitted(let id): emit.yield(.submitted(id))
             case .ready(let id, _): emit.yield(.session(id: id))
             case .toolUse(_, let name, let input): emit.yield(.activity(Activity.describe(tool: name, input: input)))
             case .text(let text): emit.yield(.message(text))

@@ -11,15 +11,20 @@ For agents whose best machine interface is a headless mode with a JSON event str
 | Resume | `amp threads continue <id>` with the same flags | the same command |
 | Model | `--mode <smart, rush, deep, ...>` on a new thread; a continued thread keeps its mode | `--model <pattern>` |
 | Supervision brief | no system-prompt flag, so a new thread's first prompt opens with it, then `---` | `--append-system-prompt` |
-| Prompt | `{"type":"user","message":{"role":"user","content":[...]}}`, with `"steer": true` mid-turn | `{"type":"prompt","message":...,"streamingBehavior":"steer"}` (Pi ignores it when idle) |
+| Prompt | `{"type":"user","message":{"role":"user","content":[...]}}`; follow-ups received while busy are queued until the current turn ends | `{"id":...,"type":"prompt","message":...,"streamingBehavior":"steer"}` (Pi ignores the steering mode when idle) |
+| `.submitted` | immediately before writing the prompt; queued follow-ups share the last submission ID when dispatched together | the matching prompt response acknowledges acceptance before the run starts or after a steer is queued |
 | `.activity` | top-level `assistant` `tool_use` blocks | `tool_execution_start` |
 | `.message` | top-level `assistant` text; subagent messages (with a `parent_tool_use_id`) are dropped | `message_end` text from the assistant |
-| `.turnEnded` | a top-level `assistant` with `stop_reason: end_turn` and no tool use (Amp's own test); an error `result` ends it failed | `agent_settled` (failed if `aborted`); a refused `prompt` or a `stopReason: error` message fails it |
+| `.turnEnded` | a top-level `assistant` with `stop_reason: end_turn` and no tool use (Amp's own test); an error `result` ends it failed; successful `result` summaries are ignored | `agent_settled` (failed if `aborted`); a refused `prompt` or a `stopReason: error` message fails it |
 | `.notice` | error `system` and `result` messages | `auto_retry_start`, `compaction_start`, `extension_error`, warning and error `notify` |
 | Questions | none in headless mode | other extensions' `select`, `confirm`, `input` and `editor` dialogs become `.request(.question)` |
 | `stop()` | close stdin and SIGTERM the group (Amp's handler ends the run cleanly), SIGKILL after 5s | `{"type":"abort"}`, up to 3s to settle, then the same |
 
 **One process, many turns.** Follow-ups go down stdin. If the process exits between turns (Amp does after an error result), the worker stays and the next `steer` starts a new process on the same session. An exit mid-turn with no result is `.exited("<Harness> exited (<code>). <stderr>")`. A `WorkerLaunch.sessionID` is always resumed: Amp ids only exist once Amp has reported them, so this holds even when a launch says `resume: false`.
+
+**Ordered submissions.** Amp has no correlated prompt acknowledgment, so tilde serializes its prompts. While a follow-up is queued, the preceding completion dispatches the queue instead of reporting success for the new instruction. A later successful `result` is a run summary, which may arrive after that dispatch or only when stdin closes; it cannot complete the next turn. Pi echoes the prompt's request ID in its preflight response, allowing mid-turn steering without treating an already buffered `agent_settled` as the new instruction's completion. This ordering was checked in the locally installed Pi 1.0.4 RPC and agent-session source, without a model call. Exiting while an acknowledgment is pending ends the worker even if the preceding turn has already settled.
+
+Pi must acknowledge a `started` or `queued` model turn. Its `handled` disposition means an extension consumed the prompt without starting one; tilde reports that as unverified rather than using the preceding turn's result. Unknown dispositions also fail verification.
 
 ## The gate
 
@@ -60,7 +65,7 @@ What the gate does not cover:
 ## Limitations
 
 - Amp's brief is a prompt, not a system prompt, so compaction may summarize it away.
-- `steer: true` is current Amp; 0.0.1778252358 parses it and sends the message as a plain new message. If Amp answers a mid-turn steer as a turn of its own, the worker reports two turn ends: any activity after a turn end reopens the turn.
+- Amp follow-ups wait for the current turn to end before being sent. Several waiting follow-ups are combined into one prompt, and only the latest submission ID is reported when it is dispatched.
 - Amp has no headless question tool; agents ask in their reply.
 - The settings copy can hold whatever the user keeps in Amp's settings (an MCP server's env, a Bitbucket token). It is written 0600 and deleted on stop, but a crash leaves it in the temp folder until macOS cleans it.
 - tilde passes no MCP servers; agents use their own configuration. Sign-in is the user's.

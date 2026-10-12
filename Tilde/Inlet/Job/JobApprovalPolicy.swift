@@ -16,7 +16,7 @@ struct JobApprovalPolicy: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Automatically allow folder listings this turn")
                         .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.text2)
-                    Text("Claude permission requests for /bin/ls of this job's folder only. Expires when the turn ends or stops. Other requests still need approval.")
+                    Text("Claude permission requests for /bin/ls of this job's folder only. Expires on new feedback, completion, or stop. Other requests still need approval.")
                         .font(.system(size: 11)).foregroundStyle(Theme.text3)
                         .fixedSize(horizontal: false, vertical: true)
                 }

@@ -36,6 +36,7 @@ extension Conductor {
                 do {
                     try await spawn(job, brief: "tilde restarted while you were working. Continue where you left off.", resume: true)
                 } catch {
+                    guard !(error is DeliveryInterrupted) else { return }
                     update(job.id) { $0.phase = .failed; $0.ticker = "Couldn't resume: \(error)" }
                 }
             }

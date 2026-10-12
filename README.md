@@ -48,7 +48,7 @@ Requires macOS 27, Xcode 27, and at least one of `claude` / `codex` signed in. t
 
 ### Bounded automatic approvals
 
-Automatic approval of worker permission requests is **off by default**. For an active job, its review panel offers “Automatically allow folder listings this turn.” This is an owner control, not a manager tool or a notebook rule. It expires at turn completion, stop, exit, worker replacement, and app restart; it is never enabled by installation.
+Automatic approval of worker permission requests is **off by default**. For an active job, its review panel offers “Automatically allow folder listings this turn.” This is an owner control, not a manager tool or a notebook rule. It expires at turn completion, a new follow-up, stop, exit, worker replacement, and app restart; it is never enabled by installation.
 
 The exact supported scope is deliberately narrow: a Claude `Bash` permission callback for `/bin/ls '<job workdir>'` or `/bin/ls -1 '<job workdir>'`. The exact absolute job path may also be unquoted when it contains only shell-safe characters. No other arguments, commands, redirects, substitutions, environment changes, or current-directory assumptions are accepted. Listing folder names does not read file contents. An unsupported command still needs approval even if the manager calls it safe.
 

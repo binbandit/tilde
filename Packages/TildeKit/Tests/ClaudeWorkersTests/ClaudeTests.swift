@@ -58,15 +58,19 @@ import WorkerKit
         launch.executable = try fakeClaude()
         let session = ClaudeSession(launch, host: NoHost())
         try await session.start()
-        try await session.send("Add a CONTRIBUTING.md")
+        let submission = UUID()
+        try await session.send("Add a CONTRIBUTING.md", submission: submission)
 
         var said: [String] = []
+        var submissions: [UUID] = []
         for await event in session.events {
             switch event {
+            case .submitted(let id): submissions.append(id)
             case .text(let text): said.append(text)
             case .turnDone(let turn):
                 #expect(turn.text == "done")
                 #expect(said == ["done"])
+                #expect(submissions == [submission])
                 await session.stop()
                 return
             default: continue
@@ -84,17 +88,21 @@ import WorkerKit
         try "#!/bin/sh\nexec /usr/bin/python3 -I '\(fixture)'\n".write(toFile: claude, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: claude)
         let worker = ClaudeWorker(workdir: FileManager.default.temporaryDirectory.path, sessionID: UUID().uuidString.lowercased(), executable: claude)
-        try await worker.start(brief: "add the nav")
-        try await worker.steer("and make it sticky")
+        let first = UUID(), second = UUID()
+        try await worker.start(brief: "add the nav", submission: first)
+        try await worker.steer("and make it sticky", submission: second)
 
         var ended: [String] = []
+        var submissions: [UUID] = []
         for await event in worker.events {
+            if case .submitted(let id) = event { submissions.append(id) }
             if case .turnEnded(_, let text) = event {
                 ended.append(text)
                 break
             }
         }
         #expect(ended == ["did: and make it sticky"])
+        #expect(submissions == [first, second])
         await worker.stop()
     }
 }

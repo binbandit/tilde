@@ -415,7 +415,7 @@ public actor Manager: CodexHost {
                     done.append(line)
                 }
                 if let taps = turn, !taps.isEmpty, let doing = Self.doing(item) { emit.yield(.activity(taps: taps, text: doing)) }
-            case .turnStarted:
+            case .submitted, .turnStarted:
                 break
             }
         }

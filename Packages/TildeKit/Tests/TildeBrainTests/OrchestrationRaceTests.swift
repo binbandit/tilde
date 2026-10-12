@@ -11,20 +11,32 @@ private actor GatedWorker: Worker {
     private let emit: AsyncStream<WorkerEvent>.Continuation
     private let gateSteer: Bool
     private let gateStop: Bool
+    private let markBeforeGate: Bool
+    private let failSteer: Bool
+    private let failStart: Bool
     private var steering: CheckedContinuation<Void, Never>?
     private var stopping: CheckedContinuation<Void, Never>?
     private(set) var didSteer = false
     private(set) var didStop = false
 
-    init(steer: Bool = false, stop: Bool = false) {
+    init(steer: Bool = false, stop: Bool = false, markBeforeGate: Bool = false, failSteer: Bool = false, failStart: Bool = false) {
         gateSteer = steer
         gateStop = stop
+        self.markBeforeGate = markBeforeGate
+        self.failSteer = failSteer
+        self.failStart = failStart
         (events, emit) = AsyncStream.makeStream()
     }
-    func start(brief: String) async throws {}
-    func steer(_ text: String) async throws {
+    func start(brief: String, submission: UUID?) async throws {
+        if let submission { emit.yield(.submitted(submission)) }
+        if failStart { throw CancellationError() }
+    }
+    func steer(_ text: String, submission: UUID?) async throws {
+        if markBeforeGate, let submission { emit.yield(.submitted(submission)) }
         didSteer = true
         if gateSteer { await withCheckedContinuation { steering = $0 } }
+        if failSteer { throw CancellationError() }
+        if !markBeforeGate, let submission { emit.yield(.submitted(submission)) }
     }
     func resolve(_ requestID: String, _ answer: WorkerAnswer) {}
     func stop() async {
@@ -33,7 +45,10 @@ private actor GatedWorker: Worker {
     }
     func releaseSteer() { steering?.resume(); steering = nil }
     func releaseStop() { stopping?.resume(); stopping = nil }
-    func end() { emit.yield(.turnEnded(ok: true, text: "Finished")) }
+    func end() {
+        emit.yield(.turnEnded(ok: true, text: "Finished"))
+        emit.yield(.notice("Completion event drained"))
+    }
 }
 
 private actor ExitAfterApprovalWorker: Worker {
@@ -42,8 +57,12 @@ private actor ExitAfterApprovalWorker: Worker {
     nonisolated let release = DispatchSemaphore(value: 0)
     private(set) var answers = 0
     init() { (events, emit) = AsyncStream.makeStream() }
-    func start(brief: String) async throws {}
-    func steer(_ text: String) async throws {}
+    func start(brief: String, submission: UUID?) async throws {
+        if let submission { emit.yield(.submitted(submission)) }
+    }
+    func steer(_ text: String, submission: UUID?) async throws {
+        if let submission { emit.yield(.submitted(submission)) }
+    }
     func resolve(_ requestID: String, _ answer: WorkerAnswer) {
         answers += 1
         emit.yield(.exited(nil))
@@ -102,10 +121,13 @@ private actor ExitAfterApprovalWorker: Worker {
         let delegated = await fixture.call(conductor, "delegate", ["project_path": .string(fixture.repo), "title": "Handoff", "brief": "Fixture", "harness": .string(id.rawValue)])
         #expect(!delegated.isError)
         let job = try #require(conductor.jobs.first)
+        #expect(conductor.setAutomaticApproval(true, for: job.id))
         let delivery = Task { try await conductor.deliver("New feedback", to: job.id, from: .you) }
         try await eventually { await worker.didSteer }
+        #expect(!conductor.automaticApprovalEnabled(for: job.id))
         await worker.end()
-        try await eventually { conductor.turnEnded[job.id] != nil }
+        try await eventually { conductor.job(job.id)?.ticker == "Completion event drained" }
+        #expect(conductor.turnEnded[job.id] == nil)
         #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
         await worker.releaseSteer()
         try await delivery.value
@@ -131,6 +153,78 @@ private actor ExitAfterApprovalWorker: Worker {
         #expect(conductor.job(job.id)?.phase == .stopped)
         #expect(conductor.deliveriesInFlight[job.id] == nil)
         #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
+    }
+
+    @Test(arguments: [false, true])
+    func earlyCompletionRequiresAcceptedSubmission(fail: Bool) async throws {
+        let fixture = ConductorTests()
+        let conductor = try await fixture.makeConductor()
+        let worker = GatedWorker(steer: true, markBeforeGate: true, failSteer: fail)
+        let id = harness(worker)
+        _ = await fixture.call(conductor, "delegate", ["title": "Fast", "brief": "Fixture", "harness": .string(id.rawValue)])
+        let job = try #require(conductor.jobs.first)
+        let delivery = Task { try await conductor.deliver("Fast new work", to: job.id, from: .you) }
+        try await eventually { await worker.didSteer }
+        await worker.end()
+        try await eventually { conductor.pendingCompletions[job.id] != nil }
+        #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
+        await worker.releaseSteer()
+        if fail {
+            await #expect(throws: CancellationError.self) { try await delivery.value }
+            #expect(!conductor.successfulTurns.contains(job.id))
+            #expect(conductor.job(job.id)?.phase == .failed)
+            #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
+        } else {
+            try await delivery.value
+            try await eventually { conductor.successfulTurns.contains(job.id) }
+            #expect(!(await fixture.call(conductor, "finish", ["job": .string(job.id)])).isError)
+        }
+        await conductor.stopWorker(job.id)
+    }
+
+    @Test func cancelledSendAndFailedStartStopTheirWorkers() async throws {
+        let fixture = ConductorTests()
+        let conductor = try await fixture.makeConductor()
+        let failed = GatedWorker(failStart: true)
+        let failedID = harness(failed)
+        let result = await fixture.call(conductor, "delegate", ["title": "Failed", "brief": "Fixture", "harness": .string(failedID.rawValue)])
+        #expect(result.isError)
+        let failedJob = try #require(conductor.jobs.first)
+        #expect(conductor.workers[failedJob.id] == nil)
+        #expect(conductor.job(failedJob.id)?.phase == .failed)
+        #expect(await failed.didStop)
+
+        let worker = GatedWorker(steer: true, markBeforeGate: true)
+        let id = harness(worker)
+        _ = await fixture.call(conductor, "delegate", ["title": "Cancel", "brief": "Fixture", "harness": .string(id.rawValue)])
+        let job = try #require(conductor.jobs.first { $0.harness == id })
+        let delivery = Task { try await conductor.deliver("Cancelled", to: job.id, from: .you) }
+        try await eventually { await worker.didSteer }
+        await worker.end()
+        try await eventually { conductor.pendingCompletions[job.id] != nil }
+        delivery.cancel()
+        await worker.releaseSteer()
+        await #expect(throws: (any Error).self) { try await delivery.value }
+        #expect(await worker.didStop)
+        #expect(conductor.workers[job.id] == nil)
+        #expect(!conductor.successfulTurns.contains(job.id))
+        #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
+    }
+
+    @Test func stopDuringResumePreparationNeverRegistersWorker() async throws {
+        let fixture = ConductorTests()
+        let (conductor, job) = try await CompletionTests().readyToFinish(fixture)
+        let worker = GatedWorker()
+        let id = harness(worker)
+        conductor.update(job.id) { $0.harness = id; $0.phase = .stopped }
+        let delivery = Task { try await conductor.deliver("Resume", to: job.id, from: .you) }
+        for _ in 0..<200 where conductor.deliveriesInFlight[job.id] == nil { await Task.yield() }
+        #expect(conductor.deliveriesInFlight[job.id] != nil)
+        #expect(conductor.workers[job.id] == nil)
+        await conductor.stop(job.id)
+        await #expect(throws: (any Error).self) { try await delivery.value }
+        #expect(conductor.workers[job.id] == nil)
+        #expect(conductor.job(job.id)?.phase == .stopped)
     }
 
     @Test(arguments: [false, true])
