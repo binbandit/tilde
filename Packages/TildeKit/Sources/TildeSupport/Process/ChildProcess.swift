@@ -40,16 +40,35 @@ public final class ChildProcess: Sendable {
     public let lines: AsyncStream<String>
 
     private let stdin: Mutex<Int32?>
+    private let inputStopped = Mutex(false)
     private let stderrTail = Mutex(Data())
     private let exitState = Mutex<(status: Int32?, waiters: [CheckedContinuation<Int32, Never>])>((nil, []))
+    /// The leader stays waitable until group cleanup is done, reserving its PID/PGID.
+    /// Signals and reaping use one lock so a stale terminate cannot signal a reused group.
+    private let groupState = Mutex<(reaped: Bool, deadline: ContinuousClock.Instant?)>((false, nil))
+    private let outputDone = DispatchGroup()
+    private let outputStopped = Mutex(false)
 
-    public init(_ spec: Spec) throws {
+    public convenience init(_ spec: Spec) throws {
+        try self.init(spec, stdout: nil, stderr: nil)
+    }
+
+    /// Raw consumers are used by Shell, which must preserve blank lines and final bytes.
+    /// With a stdout consumer, `lines` finishes normally but does not buffer the same output again.
+    init(_ spec: Spec, stdout: (@Sendable (Data) -> Void)?, stderr: (@Sendable (Data) -> Void)?) throws {
         ChildProcess.ignoreSIGPIPE
 
         let path = try ChildProcess.resolve(spec.executable, path: spec.environment["PATH"] ?? "")
         var inPipe: [Int32] = [0, 0], outPipe: [Int32] = [0, 0], errPipe: [Int32] = [0, 0]
         guard pipe(&inPipe) == 0, pipe(&outPipe) == 0, pipe(&errPipe) == 0 else {
             throw Failure.spawn(spec.executable, errno)
+        }
+        // Keep writes serialized, but never hold the stdin lock in an uninterruptible
+        // write when a detached descendant keeps the read end open without reading it.
+        guard fcntl(inPipe[1], F_SETFL, O_NONBLOCK) == 0 else {
+            let code = errno
+            (inPipe + outPipe + errPipe).forEach { close($0) }
+            throw Failure.spawn(spec.executable, code)
         }
 
         var actions: posix_spawn_file_actions_t? = nil
@@ -94,23 +113,39 @@ public final class ChildProcess: Sendable {
         let (lines, continuation) = AsyncStream<String>.makeStream(bufferingPolicy: .unbounded)
         self.lines = lines
         let outFD = outPipe[0], errFD = errPipe[0]
-        Thread.detachNewThread {
-            ChildProcess.readLines(outFD) { continuation.yield($0) }
+        outputDone.enter()
+        outputDone.enter()
+        Thread.detachNewThread { [self] in
+            if let stdout { ChildProcess.readChunks(outFD, until: { self.outputStopped.withLock { $0 } }, stdout) }
+            else { ChildProcess.readLines(outFD) { continuation.yield($0) } }
             continuation.finish()
+            self.outputDone.leave()
         }
         // These threads hold `self` until the child exits and its pipes close.
         Thread.detachNewThread { [self] in
-            ChildProcess.readChunks(errFD) { chunk in
+            let stop: (() -> Bool)? = stderr == nil ? nil : { self.outputStopped.withLock { $0 } }
+            ChildProcess.readChunks(errFD, until: stop) { chunk in
+                stderr?(chunk)
                 self.stderrTail.withLock { tail in
                     tail.append(chunk)
                     if tail.count > 16_384 { tail.removeFirst(tail.count - 16_384) }
                 }
             }
+            self.outputDone.leave()
         }
         let childPID = pid
         Thread.detachNewThread { [self] in
+            var info = siginfo_t()
+            var result: Int32
+            repeat { result = waitid(P_PID, id_t(childPID), &info, WEXITED | WNOWAIT) } while result == -1 && errno == EINTR
+            // The leader may exit before its children. Clean them while its unreaped PID
+            // still reserves the group identity, including on a natural/crash exit.
+            if result == 0 { self.finishGroup() }
             var status: Int32 = 0
-            while waitpid(childPID, &status, 0) == -1, errno == EINTR {}
+            self.groupState.withLock { state in
+                while waitpid(childPID, &status, 0) == -1, errno == EINTR {}
+                state.reaped = true
+            }
             let code = (status & 0x7F) == 0 ? (status >> 8) & 0xFF : 128 + (status & 0x7F)
             let waiters = self.exitState.withLock { state in
                 state.status = code
@@ -133,11 +168,18 @@ public final class ChildProcess: Sendable {
             try data.withUnsafeBytes { raw in
                 var offset = 0
                 while offset < raw.count {
+                    guard !inputStopped.withLock({ $0 }) else { throw Failure.stdinClosed }
                     let n = Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset)
                     if n < 0 {
                         if errno == EINTR { continue }
+                        if errno == EAGAIN {
+                            var descriptor = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                            _ = poll(&descriptor, 1, 50)
+                            continue
+                        }
                         throw Failure.stdinClosed
                     }
+                    guard n > 0 else { throw Failure.stdinClosed }
                     offset += n
                 }
             }
@@ -145,6 +187,7 @@ public final class ChildProcess: Sendable {
     }
 
     public func closeStdin() {
+        inputStopped.withLock { $0 = true }
         stdin.withLock { fd in
             if let open = fd { close(open) }
             fd = nil
@@ -168,19 +211,68 @@ public final class ChildProcess: Sendable {
         }
     }
 
+    func waitForOutput() async {
+        await withCheckedContinuation { continuation in
+            outputDone.notify(queue: .global()) { continuation.resume() }
+        }
+    }
+
+    var isFinished: Bool { exitStatus != nil && outputDone.wait(timeout: .now()) == .success }
+
+    /// A detached helper can retain our pipes after leaving the owned group. A Shell
+    /// deadline must still finish; stop its raw readers once group shutdown is complete.
+    func stopOutput() { outputStopped.withLock { $0 = true } }
+
     /// SIGTERM the group, then SIGKILL whatever is left after `grace`.
     public func terminate(grace: Duration = .seconds(3)) async {
-        closeStdin()
-        guard exitStatus == nil else { return }
-        killpg(pid, SIGTERM)
+        inputStopped.withLock { $0 = true }
+        groupState.withLock { state in
+            guard !state.reaped else { return }
+            let deadline = ContinuousClock.now + grace
+            state.deadline = min(state.deadline ?? deadline, deadline)
+            killpg(pid, SIGTERM)
+        }
         // waitForExit can't be cancelled, so the deadline runs beside it rather than racing it.
-        let pid = self.pid
         let killer = Task {
             try? await Task.sleep(for: grace)
-            if !Task.isCancelled, self.exitStatus == nil { killpg(pid, SIGKILL) }
+            if !Task.isCancelled { self.signalGroup(SIGKILL) }
         }
+        // Stopped writers release the stdin lock at their next poll, even if a detached
+        // helper holds the read end. Arm escalation before waiting for that lock too.
+        closeStdin()
         _ = await waitForExit()
         killer.cancel()
+    }
+
+    private func signalGroup(_ signal: Int32) {
+        groupState.withLock { state in
+            if !state.reaped { killpg(pid, signal) }
+        }
+    }
+
+    /// Called only after waitid observed the leader's exit without reaping it.
+    private func finishGroup() {
+        groupState.withLock { state in
+            if state.deadline == nil { state.deadline = .now + .seconds(3) }
+            killpg(pid, SIGTERM)
+        }
+        while groupHasChildren() {
+            let deadline = groupState.withLock { $0.deadline! }
+            if ContinuousClock.now >= deadline {
+                signalGroup(SIGKILL)
+                return
+            }
+            usleep(10_000)
+        }
+    }
+
+    private func groupHasChildren() -> Bool {
+        // We only need to find one other member; a full buffer also proves that.
+        var members = [pid_t](repeating: 0, count: 32)
+        let bytes = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(pid), &members, Int32(members.count * MemoryLayout<pid_t>.stride))
+        // If enumeration fails, retain the PID until the grace period and kill the group.
+        guard bytes > 0 else { return true }
+        return members.prefix(Int(bytes) / MemoryLayout<pid_t>.stride).contains { $0 != 0 && $0 != pid }
     }
 
     // MARK: Helpers
@@ -200,13 +292,19 @@ public final class ChildProcess: Sendable {
         throw Failure.notFound(name)
     }
 
-    private static func readChunks(_ fd: Int32, _ body: (Data) -> Void) {
+    private static func readChunks(_ fd: Int32, until stopped: (() -> Bool)? = nil, _ body: (Data) -> Void) {
         defer { close(fd) }
+        if stopped != nil { _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) }
         var buffer = [UInt8](repeating: 0, count: 65_536)
         while true {
+            if stopped?() == true { return }
             let n = read(fd, &buffer, buffer.count)
             if n > 0 { body(Data(buffer[0..<n])) }
             else if n < 0, errno == EINTR { continue }
+            else if n < 0, errno == EAGAIN, stopped != nil {
+                var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                _ = poll(&descriptor, 1, 50)
+            }
             else { return }
         }
     }

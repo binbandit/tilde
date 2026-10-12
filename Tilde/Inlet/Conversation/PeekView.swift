@@ -9,6 +9,23 @@ struct PeekView: View {
     var actions: InletActions
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Spacer()
+                Button(action: actions.minimize) {
+                    Image(systemName: "minus").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text3)
+                        .frame(width: 24, height: 24)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .help("Minimize chat")
+                .accessibilityLabel("Minimize chat")
+            }
+            message
+        }
+    }
+
+    @ViewBuilder private var message: some View {
         if let index = model.thread.firstIndex(where: { $0.id == messageID }), model.thread[index].from == .you {
             // Something you said that didn't get through, with its way to try again.
             YourWords(text: model.thread[index].text, at: model.thread[index].at, receipt: model.thread[index])
