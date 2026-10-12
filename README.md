@@ -4,7 +4,7 @@
 
 tilde is a coworker that lives in your Mac. Point at something, say what you want, and it briefs the right coding agent, watches it work, answers its questions the way you would, and only interrupts you when something is genuinely yours to decide. It remembers how you like things done, what you're working on, and what you've been working on.
 
-It isn't an app. There's no window, no Dock icon, no menu-bar item. tilde lives in a black shape that sinks into the edge of your display, like a notch on its side.
+tilde lives in a black shape that sinks into the edge of your display, like a notch on its side. Its `~` menu-bar item opens Settings or quits the app; there's no Dock icon or main window.
 
 ## How it feels
 
@@ -12,6 +12,7 @@ It isn't an app. There's no window, no Dock icon, no menu-bar item. tilde lives 
 - **The Inlet** on the right edge is tilde's home. A hairline when there's nothing to say, a living `~` while agents work, amber when something needs you. Hover to see everything; questions are answerable right there, with tilde's recommendation already in amber.
 - **Review** opens wide out of the edge: what was done, the diff, and one click to bring it into your checkout, ask for a PR, open it in your editor, take over the session in your terminal, or discard it.
 - **Memory you can read.** Everything tilde knows is plain markdown in `~/.tilde/notebook`, a git repo. `git log` is how it learned; `git revert` is how you make it forget.
+- **Start when you choose.** Launch at login is off by default. Enable it in Settings; tilde reports when macOS needs your approval in Login Items.
 
 ## How it works
 

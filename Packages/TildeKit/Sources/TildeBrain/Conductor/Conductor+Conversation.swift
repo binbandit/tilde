@@ -30,6 +30,10 @@ extension Conductor {
             if text.contains(/(?i)\b(PRs?|pull requests?|reviews?|CI|checks)\b/), !watching.isEmpty {
                 body += "\n<pull_requests>\n\(Self.untrusted(watching))\n</pull_requests>"
             }
+            let terminalAgents = await initiative.terminalAgentContext(own: Set(jobs.compactMap(\.sessionID)))
+            if !terminalAgents.isEmpty {
+                body += "\n<terminal_agents>\n\(Self.untrusted(terminalAgents))\n</terminal_agents>"
+            }
             await manager.post(.init(
                 "<tap \(attributes)>\n\(body)\n</tap>", tap: id,
                 paths: [context.repo, context.cwd, context.document].compactMap { $0 },

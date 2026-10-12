@@ -1,5 +1,6 @@
 import Foundation
 import TildeSupport
+import TildeWork
 
 /// The background review's rhythm (one at a time, every ~90 minutes of activity, the morning
 /// brief once a day) and what the watchers hand it.
@@ -42,6 +43,7 @@ extension Initiative {
 
     /// The latest of what the watchers saw: PRs, agents waiting, and what's held back for later.
     func watching() -> String {
+        refreshTerminalAgents()
         var sections: [String] = []
         let open = pulls.filter { $0.isMine && !$0.merged }
         // Only the most recently updated are here; a count says how many there are in all.
@@ -56,6 +58,7 @@ extension Initiative {
         if !waiting.isEmpty {
             sections.append("Coding agents waiting on you:\n" + waiting.map(\.line).joined(separator: "\n"))
         }
+        if !terminalAgents.isEmpty { sections.append(terminalDescription) }
         if !held.isEmpty {
             sections.append("Noticed, not yet said:\n" + held.map { "- [\($0.urgency.rawValue)] \($0.summary)" }.joined(separator: "\n"))
         }
@@ -76,7 +79,31 @@ extension Initiative {
     /// Pull requests and agent sessions that changed since `date`, for the morning brief.
     func changes(since date: Date) -> [String] {
         pulls.filter { ($0.updatedAt ?? .distantPast) > date }.map(\.line)
-            + AgentWatch.waiting(since: date, own: ownSessions).map(\.line)
+            + AgentWatch.waiting(since: date, own: ownSessions, home: home).map(\.line)
+    }
+
+    /// Read only the local opted-in event store, including when a tap arrives
+    /// before the next background poll. Never connect to or resume these agents.
+    func refreshTerminalAgents(now: Date = .now) {
+        terminalAgents = ((try? TerminalAgentRegistry(home: home).sessions(now: now)) ?? [])
+            .filter { !ownSessions.contains($0.session) }
+        waiting = Array(AgentWatch.waiting(since: now.addingTimeInterval(-3 * 3600), own: ownSessions, home: home, now: now).prefix(20))
+    }
+
+    func terminalAgentContext(own: Set<String>) -> String {
+        ownSessions = own
+        refreshTerminalAgents()
+        return terminalAgents.isEmpty ? "" : terminalDescription
+    }
+
+    private var terminalDescription: String {
+        "Connected terminal agents (last observed events, not managed jobs; no control or permission to take over):\n"
+            + terminalAgents.prefix(20).map { session in
+                "- \(session.adapter.name) in \(session.cwd.clipped(to: 400)): \(session.state.rawValue), observed "
+                    + session.updatedAt.formatted(.relative(presentation: .named))
+                    + (session.isStale() ? "; stale, current state unknown" : "")
+            }.joined(separator: "\n")
+            + (terminalAgents.count > 20 ? "\n(Showing the 20 most recent of \(terminalAgents.count) observations.)" : "")
     }
 }
 

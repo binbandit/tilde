@@ -7,6 +7,10 @@ app := derived + "/Build/Products/Debug/tilde.app"
 gen:
     xcodegen generate --quiet
 
+# Regenerate the checked-in macOS icon assets from tilde's wave
+icon:
+    swift scripts/generate-app-icon.swift
+
 # Build the app (Debug)
 build: gen
     xcodebuild -project Tilde.xcodeproj -scheme Tilde -configuration Debug -derivedDataPath {{derived}} -destination 'platform=macOS' build -quiet

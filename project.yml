@@ -30,6 +30,10 @@ targets:
         type: syncedFolder
     dependencies:
       - package: TildeKit
+    postBuildScripts:
+      - name: Embed terminal lifecycle helper
+        script: 'bash "$SRCROOT/scripts/build-agent-hook.sh"'
+        basedOnDependencyAnalysis: false
     entitlements:
       path: Tilde/Tilde.entitlements
       properties:
