@@ -23,7 +23,9 @@ actor ScriptedWorker: Worker {
     }
 
     /// Like a real worker, returns as soon as the work is underway.
-    func start(brief: String) async throws {
+    func start(brief: String, submission: UUID?) async throws {
+        if let submission { emit.yield(.submitted(submission)) }
+
         Task { try? await self.work(brief) }
     }
 
@@ -43,7 +45,10 @@ actor ScriptedWorker: Worker {
         emit.yield(.turnEnded(ok: true, text: "Added Nav.swift."))
     }
 
-    func steer(_ text: String) async throws { emit.yield(.message(text)) }
+    func steer(_ text: String, submission: UUID?) async throws {
+        if let submission { emit.yield(.submitted(submission)) }
+        emit.yield(.message(text))
+    }
     func resolve(_ requestID: String, _ answer: WorkerAnswer) { waiting.removeValue(forKey: requestID)?.resume(returning: answer) }
     func stop() async { emit.finish() }
 }

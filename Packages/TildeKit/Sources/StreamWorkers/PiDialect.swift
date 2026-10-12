@@ -13,6 +13,7 @@ struct PiDialect: StreamDialect {
     let label = "Pi"
     let gate = GateChannel.stream
     let briefInPrompt = false
+    let acknowledgesPrompts = true
     var interrupt: JSON? { ["type": "abort"] }
 
     static let gateTitle = "tilde:gate"
@@ -53,6 +54,10 @@ struct PiDialect: StreamDialect {
         case "extension_error":
             return [.notice("A Pi extension failed: \(line["error"]?.string ?? "unknown error")")]
         case "response":
+            if line["command"]?.string == "prompt", let id = line["id"]?.string {
+                return [.promptResponse(id: id, accepted: line["success"]?.bool == true,
+                                        disposition: line["data"]?["disposition"]?.string, error: line["error"]?.string)]
+            }
             guard line["success"]?.bool == false else { return [] }
             let error = line["error"]?.string ?? "Pi refused a command."
             // A refused prompt never starts a run, so nothing else will end the turn.

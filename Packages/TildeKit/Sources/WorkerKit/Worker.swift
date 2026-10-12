@@ -1,17 +1,27 @@
+import Foundation
+
 /// A coding agent working on one job, whatever harness runs it.
 public protocol Worker: Actor {
     nonisolated var events: AsyncStream<WorkerEvent> { get }
     /// Launches the agent with its first instruction.
-    func start(brief: String) async throws
+    func start(brief: String, submission: UUID?) async throws
     /// A follow-up instruction, delivered at the next opportunity.
-    func steer(_ text: String) async throws
+    func steer(_ text: String, submission: UUID?) async throws
     /// Unblocks a pending `WorkerEvent.request`.
     func resolve(_ requestID: String, _ answer: WorkerAnswer)
     func stop() async
 }
 
+public extension Worker {
+    func start(brief: String) async throws { try await start(brief: brief, submission: nil) }
+    func steer(_ text: String) async throws { try await steer(text, submission: nil) }
+}
+
 public enum WorkerEvent: Sendable {
     case session(id: String)
+    /// An ordered boundary in the source event stream when this prompt is sent or accepted into
+    /// the queue. The call must also succeed before its completion is accepted by the conductor.
+    case submitted(UUID)
     /// Short present-tense status for tickers ("Running swift build").
     case activity(String)
     case message(String)
@@ -30,10 +40,13 @@ public struct WorkerRequest: Sendable, Identifiable {
 
     public let id: String
     public var kind: Kind
+    /// Original harness permission data. Nil means the request cannot be automatically approved.
+    public let permissionContext: PermissionContext?
 
-    public init(id: String, kind: Kind) {
+    public init(id: String, kind: Kind, permissionContext: PermissionContext? = nil) {
         self.id = id
         self.kind = kind
+        self.permissionContext = permissionContext
     }
 
     /// One line naming what is being asked, for logs and prompts.

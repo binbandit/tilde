@@ -31,22 +31,22 @@ public actor ClaudeWorker: Worker, ClaudeHost {
         (events, emit) = AsyncStream<WorkerEvent>.makeStream(bufferingPolicy: .unbounded)
     }
 
-    public func start(brief: String) async throws {
+    public func start(brief: String, submission: UUID?) async throws {
         let session = ClaudeSession(launch, host: self)
         self.session = session
         Task { await self.relay(session) }
         try await session.start()
-        try await session.send(brief)
+        try await session.send(brief, submission: submission)
     }
 
-    public func steer(_ text: String) async throws {
+    public func steer(_ text: String, submission: UUID?) async throws {
         guard let session, await session.isRunning else {
             // The process ended (crash, restart): pick the conversation back up.
             launch.resume = true
-            try await start(brief: text)
+            try await start(brief: text, submission: submission)
             return
         }
-        try await session.send(text)
+        try await session.send(text, submission: submission)
     }
 
     public func resolve(_ requestID: String, _ answer: WorkerAnswer) {
@@ -85,23 +85,26 @@ public actor ClaudeWorker: Worker, ClaudeHost {
 
         let rail = Rails.check(tool: request.toolName, input: request.input, workdir: workdir)
         var action = Activity.action(tool: request.toolName, input: request.input)
-        // Reaching another host is tilde's call, not a rail for the owner.
+        // Reaching another host remains a permission request for the owner.
         let hosts = rail == nil ? ClaudeSandbox.newHosts(request.input) : nil
         if let hosts { action += "\n(needs the sandbox opened to \(hosts.joined(separator: ", ")))" }
         // Claude's own reason is context for whoever decides, never a rail.
         if let reason = request.reason, !reason.isEmpty { action += "\n(Claude Code says: \(reason))" }
-        switch await ask(.permission(tool: request.toolName, action: action, rail: hosts == nil ? rail : nil)) {
+        let context = PermissionContext(
+            source: .claudeToolCallback, tool: request.toolName, input: request.input,
+            workdir: workdir, blockedPath: request.blockedPath)
+        switch await ask(.permission(tool: request.toolName, action: action, rail: hosts == nil ? rail : nil), context: context) {
         case .allow: return .allow(request.input)
         case .deny(let reason): return .deny(reason)
         case .reply(let text): return .deny(text)
         }
     }
 
-    private func ask(_ kind: WorkerRequest.Kind) async -> WorkerAnswer {
+    private func ask(_ kind: WorkerRequest.Kind, context: PermissionContext? = nil) async -> WorkerAnswer {
         let id = IDs.make("r")
         return await withCheckedContinuation { continuation in
             waiting[id] = continuation
-            emit.yield(.request(WorkerRequest(id: id, kind: kind)))
+            emit.yield(.request(WorkerRequest(id: id, kind: kind, permissionContext: context)))
         }
     }
 
@@ -109,7 +112,9 @@ public actor ClaudeWorker: Worker, ClaudeHost {
 
     private func relay(_ session: ClaudeSession) async {
         for await event in session.events {
+            guard session === self.session else { continue }
             switch event {
+            case .submitted(let id): emit.yield(.submitted(id))
             case .ready(let id, _): emit.yield(.session(id: id))
             case .toolUse(_, let name, let input): emit.yield(.activity(Activity.describe(tool: name, input: input)))
             case .text(let text): emit.yield(.message(text))

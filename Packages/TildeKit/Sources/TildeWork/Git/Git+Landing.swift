@@ -4,6 +4,7 @@ import TildeSupport
 extension Git {
     public struct LandFailure: Error, CustomStringConvertible {
         public var description: String
+        public init(description: String) { self.description = description }
     }
 
     /// Brings a worktree job home: commit stragglers, rebase onto the checkout's

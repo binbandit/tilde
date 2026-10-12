@@ -67,6 +67,10 @@ public actor Manager: CodexHost {
     private let memory: Memory
     private let tools: Toolset
     private let config: Config
+    /// Job identities are resolved by the conductor, never by parsing message text or notebook notes.
+    private let repositoryPaths: @Sendable ([String]) async -> [String]
+    private var repositoryInstructions: [String: RepositoryInstructions.Snapshot] = [:]
+    private var pendingRepositoryInstructions: [String: (snapshot: RepositoryInstructions.Snapshot, revision: String)] = [:]
 
     /// The day's thread, once it's ready for turns.
     private var session: CodexSession?
@@ -93,10 +97,14 @@ public actor Manager: CodexHost {
     /// Counts turns, so a watchdog only ever watches its own.
     private var generation = 0
 
-    public init(memory: Memory, tools: Toolset, config: Config = Config()) {
+    public init(
+        memory: Memory, tools: Toolset, config: Config = Config(),
+        repositoryPaths: @escaping @Sendable ([String]) async -> [String] = { _ in [] }
+    ) {
         self.memory = memory
         self.tools = tools
         self.config = config
+        self.repositoryPaths = repositoryPaths
         (outputs, emit) = AsyncStream<Output>.makeStream(bufferingPolicy: .unbounded)
     }
 
@@ -112,17 +120,18 @@ public actor Manager: CodexHost {
     /// Brought into the turn in progress, which answers it; or, if that turn just ended, given one of its own.
     private func steer(_ message: Message) async {
         guard let session, let tap = message.tap else { return requeue(message) }
-        let text = await withBriefing(message.text, paths: message.paths, jobs: message.jobs)
+        let briefing = await withBriefing(message.text, paths: message.paths, jobs: message.jobs)
         do {
-            try await session.steer(text)
+            try await session.steer(briefing.text)
         } catch {
             return requeue(message)
         }
         guard turn != nil else { return requeue(message) }
+        received(briefing.repositories)
         Log.info("manager", "steered in: \(message.text.clipped(to: 200))")
         turn?.append(tap)
         emit.yield(.read(taps: turn ?? [tap]))
-        asked += "\n\n" + text
+        asked += "\n\n" + briefing.text
         streaming = ""
         said = [said, message.text].filter { !$0.isEmpty }.joined(separator: "\n")
     }
@@ -164,11 +173,15 @@ public actor Manager: CodexHost {
         turnStarted = .now
         attempts = 0
         done = []
+        repositoryInstructions = [:]
+        pendingRepositoryInstructions = [:]
         Log.info("manager", "turn: \(text.clipped(to: 300))")
         do {
             let session = try await ensureSession()
-            asked = await withBriefing(text, paths: batch.flatMap(\.paths), jobs: Array(Set(batch.flatMap(\.jobs))))
+            let briefing = await withBriefing(text, paths: batch.flatMap(\.paths), jobs: Array(Set(batch.flatMap(\.jobs))))
+            asked = briefing.text
             try await session.send(asked, effort: config.effort)
+            received(briefing.repositories)
             emit.yield(.read(taps: batch.compactMap(\.tap)))
             watch()
             await steerWaiting()
@@ -187,8 +200,54 @@ public actor Manager: CodexHost {
         for message in waiting { await steer(message) }
     }
 
-    private func withBriefing(_ text: String, paths: [String], jobs: [String]) async -> String {
-        await memory.briefing(for: text, paths: paths, jobs: jobs).map { "\($0)\n\n\(text)" } ?? text
+    private func withBriefing(
+        _ text: String, paths: [String], jobs: [String]
+    ) async -> (text: String, repositories: [RepositoryInstructions.Snapshot]) {
+        let jobPaths = await repositoryPaths(jobs)
+        let snapshots = await RepositoryInstructions.snapshots(for: paths, repositories: jobPaths)
+        let notes = await memory.briefing(for: text, paths: paths, jobs: jobs)
+        return ((snapshots.map { $0.context() } + [notes, text].compactMap { $0 }).joined(separator: "\n\n"), snapshots)
+    }
+
+    private func received(_ snapshots: [RepositoryInstructions.Snapshot]) {
+        for snapshot in snapshots {
+            repositoryInstructions[snapshot.root] = snapshot
+            pendingRepositoryInstructions[snapshot.root] = nil
+        }
+    }
+
+    /// A project discovered during the turn must be read before work is delegated or finalized.
+    /// Its current instructions make the model reconsider the action, then explicitly retry.
+    /// Re-read every time so edited instructions cannot be bypassed by a stale thread cache.
+    func prepareRepositoryWork(repository: String, tool: String = "delegate", revision: String? = nil) -> String? {
+        prepareRepositoryWork(RepositoryInstructions.load(root: repository), tool: tool, revision: revision)
+    }
+
+    private func prepareRepositoryWork(_ snapshot: RepositoryInstructions.Snapshot, tool: String, revision: String?) -> String? {
+        if case .unavailable = snapshot.state { return snapshot.context() }
+        let previous = repositoryInstructions[snapshot.root]
+        if case .absent = snapshot.state, previous == nil, pendingRepositoryInstructions[snapshot.root] == nil {
+            repositoryInstructions[snapshot.root] = snapshot
+            return nil
+        }
+        guard previous != snapshot else { return nil }
+        let token: String
+        if let pending = pendingRepositoryInstructions[snapshot.root], pending.snapshot == snapshot {
+            token = pending.revision
+        } else {
+            token = UUID().uuidString.lowercased()
+            pendingRepositoryInstructions[snapshot.root] = (snapshot, token)
+        }
+        if revision == token {
+            received([snapshot])
+            return nil
+        }
+        // Returning context does not acknowledge it. Parallel calls made before the model sees
+        // this response must also stop, and old tokens must not acknowledge changed file contents.
+        return "Read these repository instructions and reconcile the action before retrying \(tool). The requested action has not run. "
+            + "After reading, echo this exact argument on the retry:\n"
+            + JSON.object(["repository_revision": .string(token)]).compact + "\n\n"
+            + snapshot.context()
     }
 
     // MARK: Stalls
@@ -356,7 +415,7 @@ public actor Manager: CodexHost {
                     done.append(line)
                 }
                 if let taps = turn, !taps.isEmpty, let doing = Self.doing(item) { emit.yield(.activity(taps: taps, text: doing)) }
-            case .turnStarted:
+            case .submitted, .turnStarted:
                 break
             }
         }
@@ -394,6 +453,11 @@ public actor Manager: CodexHost {
     // MARK: CodexHost
 
     public func callTool(_ name: String, arguments: JSON) async -> ToolResult {
-        await tools.call(name, arguments)
+        if ["steer", "finish"].contains(name), let job = arguments["job"]?.string {
+            let snapshots = await RepositoryInstructions.snapshots(for: [], repositories: repositoryPaths([job]))
+            let unread = snapshots.compactMap { prepareRepositoryWork($0, tool: name, revision: arguments["repository_revision"]?.string) }
+            if !unread.isEmpty { return .error(unread.joined(separator: "\n\n")) }
+        }
+        return await tools.call(name, arguments)
     }
 }

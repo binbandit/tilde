@@ -13,10 +13,18 @@ extension Conductor {
     /// Brings the job's branch into the checkout.
     public func land(_ jobID: String) async throws {
         guard let job = jobs.first(where: { $0.id == jobID }) else { return }
+        guard job.reviewAction == .bringIn, let base = job.baseCommit else {
+            throw Git.LandFailure(description: "This job has no verified changes ready to bring in.")
+        }
+        guard try await !Git.checkedDiffStat(workdir: job.workdir, base: base).isEmpty else {
+            update(jobID) { $0.diff = DiffStat(files: 0, insertions: 0, deletions: 0); $0.ticker = "Complete" }
+            throw Git.LandFailure(description: "There are no changes to bring in. Mark the job Done instead.")
+        }
+        guard !Task.isCancelled, self.job(jobID)?.reviewAction == .bringIn else { return }
         await stopWorker(jobID)
         try await Git.land(job)
         await Git.removeWorktree(job, deleteBranch: true)
-        update(jobID) { $0.phase = .landed; $0.ticker = "Landed" }
+        update(jobID) { $0.phase = .landed; $0.ticker = "Landed"; $0.acknowledgedAt = nil }
         log.append(jobID, "Landed into \(job.projectName)")
         record(jobID, .you, .event, "Brought it into \(job.baseBranch ?? job.projectName)")
         log.journal("Landed \(job.title) in \(job.projectName)")
@@ -25,15 +33,29 @@ extension Conductor {
     }
 
     public func discard(_ jobID: String) async {
-        guard let job = jobs.first(where: { $0.id == jobID }) else { return }
-        await stopWorker(jobID)
+        guard let job = jobs.first(where: { $0.id == jobID }), job.canDiscard, ownsWorktree(job) else { return }
+        let stopped = await stopWorker(jobID)
+        guard workerGenerations[jobID] == stopped, ownsWorktree(job) else { return }
         await Git.removeWorktree(job, deleteBranch: true)
         dropAttention(for: jobID)
-        update(jobID) { $0.phase = .stopped; $0.ticker = "Discarded" }
+        update(jobID) { $0.phase = .stopped; $0.ticker = "Discarded"; $0.acknowledgedAt = nil }
         log.append(jobID, "Discarded by \(Owner.firstName)")
         record(jobID, .you, .event, "Discarded")
         await memory.notebook.commitChanges(context: "discarded \(jobID)")
         Task { await manager.post(.init("<worker-stopped job=\"\(jobID)\">\(Owner.firstName) discarded this job.</worker-stopped>", jobs: [jobID])) }
+    }
+
+    /// Branch names and worktree paths can be reused after removal. An older card never owns
+    /// a directory or branch now assigned to a newer job, even if its old path exists again.
+    private func ownsWorktree(_ job: Job) -> Bool {
+        let workdir = URL(fileURLWithPath: job.workdir).standardizedFileURL.resolvingSymlinksInPath()
+        let repo = URL(fileURLWithPath: job.repoPath).standardizedFileURL.resolvingSymlinksInPath()
+        return !jobs.contains { other in
+            guard other.id != job.id, other.createdAt >= job.createdAt else { return false }
+            return URL(fileURLWithPath: other.workdir).standardizedFileURL.resolvingSymlinksInPath() == workdir
+                || (job.branch != nil && other.branch == job.branch
+                    && URL(fileURLWithPath: other.repoPath).standardizedFileURL.resolvingSymlinksInPath() == repo)
+        }
     }
 
     /// Looks up the job's pull request on GitHub and remembers it.
@@ -45,10 +67,28 @@ extension Conductor {
         return pr
     }
 
-    /// Marks a job that has nothing to land (scratch work) as done.
+    /// Acknowledges a completed result. A worktree is retained for later inspection or discard.
     public func dismiss(_ jobID: String) async {
+        guard let job = job(jobID), job.reviewAction == .acknowledge else { return }
+        if job.isolation == .worktree {
+            do {
+                guard let base = job.baseCommit else { return }
+                let diff = try await Git.checkedDiffStat(workdir: job.workdir, base: base)
+                guard diff.isEmpty else {
+                    update(jobID) { $0.diff = diff; $0.ticker = "Ready for review" }
+                    emit(.trouble("\(job.title) now has changes to review."))
+                    return
+                }
+            } catch {
+                emit(.trouble("Couldn't verify \(job.title)'s completion: \(error)"))
+                return
+            }
+        }
+        guard !Task.isCancelled, self.job(jobID)?.reviewAction == .acknowledge else { return }
         await stopWorker(jobID)
-        update(jobID) { $0.phase = .landed; $0.ticker = "Done" }
+        guard self.job(jobID)?.reviewAction == .acknowledge else { return }
+        dropAttention(for: jobID)
+        update(jobID) { $0.phase = .landed; $0.ticker = "Done"; $0.acknowledgedAt = .now }
         log.append(jobID, "\(Owner.firstName) marked it done")
         record(jobID, .you, .event, "Marked it done")
         await memory.notebook.commitChanges(context: "\(jobID) done")

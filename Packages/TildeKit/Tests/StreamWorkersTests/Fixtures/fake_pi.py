@@ -47,7 +47,7 @@ def wait_for(request_id, steers):
             return record
         if record["type"] == "prompt":
             steers.append(record["message"])
-            emit({"type": "response", "command": "prompt", "success": True, "data": {"disposition": "queued"}})
+            emit({"id": record.get("id"), "type": "response", "command": "prompt", "success": True, "data": {"disposition": "queued"}})
         if record["type"] == "abort":
             emit({"type": "response", "command": "abort", "success": True})
             return None
@@ -57,10 +57,28 @@ def wait_for(request_id, steers):
 while (command := read()) is not None:
     if command["type"] != "prompt":
         continue
-    emit({"type": "response", "command": "prompt", "success": True, "data": {"disposition": "started"}})
+    if command["message"] == "refuse":
+        emit({"id": command.get("id"), "type": "response", "command": "prompt", "success": False,
+              "error": "Fixture refused the prompt"})
+        continue
+    emit({"id": command.get("id"), "type": "response", "command": "prompt", "success": True, "data": {"disposition": "started"}})
     emit({"type": "agent_start"})
     script, steers, answer = command["message"], [], {}
-    if script.startswith(("gate ", "write ")):
+    if script in ("hold-before-settle", "hold-before-settle-exit"):
+        say("old result")
+        following = read()
+        emit({"type": "agent_settled", "aborted": False})
+        if script == "hold-before-settle-exit":
+            sys.exit(3)
+        emit({"id": following.get("id"), "type": "response", "command": "prompt", "success": True,
+              "data": {"disposition": "started"}})
+        say("new result")
+    elif script.startswith("hold-before-disposition "):
+        say("old result")
+        following = read()
+        emit({"id": following.get("id"), "type": "response", "command": "prompt", "success": True,
+              "data": {"disposition": script.split(" ", 1)[1]}})
+    elif script.startswith(("gate ", "write ")):
         verb, target = script.split(" ", 1)
         call = {"tool": "bash", "input": {"command": target}} if verb == "gate" else {"tool": "write", "input": {"path": target}}
         emit({"type": "tool_execution_start", "toolCallId": "call_1", "toolName": call["tool"], "args": call["input"]})

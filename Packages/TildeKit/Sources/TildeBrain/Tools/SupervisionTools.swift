@@ -21,7 +21,10 @@ extension Conductor {
         AgentTool(
             "finish",
             "Sign off a job as complete and ready for \(Owner.firstName) to review.",
-            schema: AgentTool.object(["job": .text("Job id."), "summary": .text("1 to 3 sentences: what changed and anything to check.")], required: ["job", "summary"])
+            schema: AgentTool.object([
+                "job": .text("Job id."), "summary": .text("1 to 3 sentences: what changed and anything to check."),
+                "repository_revision": .text("Echo the token returned by repository preflight after reading its instructions and reconciling this action."),
+            ], required: ["job", "summary"])
         ) { args in await self.toolFinish(args) }
     }
 
@@ -40,9 +43,13 @@ extension Conductor {
             return .error("request and decision are required.")
         }
         guard let pending = requests[id] else { return .error("Request \(id) is no longer open.") }
-        if decision == "allow", let rail = unallowedRail(pending.request, job: pending.job) {
+        guard ["allow", "deny", "answer"].contains(decision) else { return .error("decision must be allow, deny, or answer.") }
+        if case .permission = pending.request.kind, decision == "answer" {
+            return .error("A permission requires allow or deny; a text answer cannot approve it.")
+        }
+        if decision == "allow", let reason = approvalBlock(pending.request, job: pending.job) {
             return .error(
-                "That crosses a rail (\(rail)), so it's \(Owner.firstName)'s to allow, not yours. Deny it, or `ask` them, "
+                "\(reason) It's \(Owner.firstName)'s to allow. Deny it, or `ask` them, "
                     + "passing request \"\(id)\", with what you'd pick and why.")
         }
         let text = args["text"]?.string ?? ""
@@ -52,33 +59,66 @@ extension Conductor {
             case "deny": .deny(text.isEmpty ? "Not allowed." : text)
             default: .reply(text)
             }
-        resolve(id, answer, by: .tilde)
+        guard resolve(id, answer, by: .tilde) else { return .error("The request cannot be answered: its worker stopped, its job is inactive, or permission is not authorized.") }
         return .ok("Done.")
     }
 
     private func toolFinish(_ args: JSON) async -> ToolResult {
         guard let id = args["job"]?.string, let job = job(id) else { return .error("No such job.") }
+        guard canFinish(id), let ended = turnEnded[id] else {
+            return .error("The job must finish a successful turn with no pending questions before sign-off.")
+        }
         let summary = args["summary"]?.string ?? ""
-        var diff = job.diff
-        if let base = job.baseCommit { diff = await Git.diffStat(workdir: job.workdir, base: base) }
+        var diff: DiffStat?
+        if job.isolation != .scratch {
+            guard let base = job.baseCommit else { return .error("The job's change baseline is unknown.") }
+            do {
+                diff = try await Git.checkedDiffStat(workdir: job.workdir, base: base)
+            } catch {
+                return .error("Couldn't verify the job's changes: \(error)")
+            }
+        }
+        // Inspection suspends: stop, cancellation, or new feedback invalidates this sign-off.
+        guard !Task.isCancelled, canFinish(id), turnEnded[id] == ended else {
+            return .error("The job changed while its completion was being checked.")
+        }
+        let acknowledgement = job.isolation != .worktree || diff?.isEmpty == true
+        let status = acknowledgement ? "Complete" : "Ready for review"
+        automaticApprovalJobs.remove(id)
         mention(id)
         update(id) {
             $0.phase = .ready
             $0.summary = summary
             $0.diff = diff
-            $0.ticker = "Ready for review"
+            $0.ticker = status
         }
-        // Its agent can rest, if a message to the job can pick its session back up (otherwise it would start
-        // over knowing nothing) and it hasn't been handed words since its last turn, which it may still be on.
-        if job.harness.spec?.resumeCommand != nil, (handed[id] ?? .distantPast) <= (turnEnded[id] ?? .distantPast) {
+        let signedOffAt = self.job(id)?.updatedAt
+        if job.harness.spec?.resumeCommand != nil {
             await stopWorker(id)
         }
-        log.outcome(id, "\(summary)\n\nChanges: \(diff?.label ?? "unknown")")
-        record(id, .tilde, .event, "Ready for review: \(summary)")
-        log.journal("\(job.title) in \(job.projectName) is ready for review (\(id))")
-        await memory.notebook.commitChanges(context: "\(id) ready")
+        // Stopping a harness can take seconds. New owner feedback during that wait is new work,
+        // and must not be followed by a stale completion announcement or outcome record.
+        guard self.job(id)?.phase == .ready, self.job(id)?.updatedAt == signedOffAt else {
+            return .error("The job received new work while completion was being prepared.")
+        }
+        guard !Task.isCancelled else {
+            update(id) { $0.phase = .stopped; $0.ticker = "Completion interrupted" }
+            return .error("Completion was cancelled.")
+        }
+        log.outcome(id, "\(summary)\n\nChanges: \(diff?.label ?? "not a code job")")
+        record(id, .tilde, .event, "\(status): \(summary)")
+        log.journal("\(job.title) in \(job.projectName): \(status.lowercased()) (\(id))")
+        if acknowledgement { emit(.said("\(job.title) is complete. \(summary)", jobID: id)) }
+        await memory.notebook.commitChanges(context: "\(id) complete")
         Task { await scribe.reflect(on: "A job finished. Project: \(job.projectName). Brief: \(job.brief)\nOutcome: \(summary)") }
-        return .ok("\(id) is ready for review.")
+        return .ok("\(id): \(status.lowercased())." + (acknowledgement ? " Completion was announced; there is nothing to bring in." : ""))
+    }
+
+    private func canFinish(_ id: String) -> Bool {
+        guard let job = job(id), [.deciding, .needsYou].contains(job.phase), successfulTurns.contains(id),
+            deliveriesInFlight[id, default: 0] == 0,
+            let ended = turnEnded[id], (handed[id] ?? .distantPast) <= ended else { return false }
+        return !requests.values.contains { $0.job == id } && !attention.contains { $0.jobID == id }
     }
 
     private func toolJobs() async -> ToolResult {

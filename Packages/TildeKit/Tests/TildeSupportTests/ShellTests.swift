@@ -44,8 +44,10 @@ import Testing
 
     @Test func timeoutAlsoClosesPipesInheritedFromAnExitedLeader() async throws {
         let started = ContinuousClock.now
+        // Install the ignored disposition before forking so natural-exit cleanup
+        // cannot signal the child before it has installed its own trap.
         let output = try await Shell.run(
-            ["/bin/sh", "-c", "(trap '' TERM; sleep 10) & exit 0"], environment: environment,
+            ["/bin/sh", "-c", "trap '' TERM; sleep 10 & exit 0"], environment: environment,
             timeout: .milliseconds(100))
         #expect(ContinuousClock.now - started < .seconds(2))
         #expect(output.timedOut)

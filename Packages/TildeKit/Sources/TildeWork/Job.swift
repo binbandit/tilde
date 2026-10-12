@@ -47,10 +47,29 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
     /// The manager's sign-off, or the worker's last word.
     public var summary: String?
     public var diff: DiffStat?
+    /// An acknowledged result may retain its worktree; actual landing never sets this.
+    public var acknowledgedAt: Date?
     /// The pull request for this job's branch, once there is one.
     public var pullRequest: PullRequest?
     public var createdAt: Date
     public var updatedAt: Date
+
+    /// The primary review action is based on observed changes, never a model's summary.
+    public enum ReviewAction: Sendable {
+        case bringIn, acknowledge, unavailable
+    }
+
+    public var reviewAction: ReviewAction {
+        guard phase == .ready else { return .unavailable }
+        guard isolation == .worktree else { return .acknowledge }
+        guard let diff else { return .unavailable }
+        return diff.isEmpty ? .acknowledge : .bringIn
+    }
+
+    /// Acknowledging a no-change worktree retains it, so explicit cleanup remains available.
+    public var canDiscard: Bool {
+        !phase.isActive && isolation != .inPlace && (phase != .landed || (isolation == .worktree && acknowledgedAt != nil))
+    }
 
     public init(
         id: String, title: String, brief: String, projectName: String, repoPath: String, workdir: String,

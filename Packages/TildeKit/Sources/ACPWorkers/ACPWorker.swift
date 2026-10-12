@@ -45,7 +45,8 @@ public actor ACPWorker: Worker {
         (events, emit) = AsyncStream<WorkerEvent>.makeStream(bufferingPolicy: .unbounded)
     }
 
-    public func start(brief: String) async throws {
+    public func start(brief: String, submission: UUID?) async throws {
+        try Task.checkCancellation()
         busy = true
         stopping = false
         do {
@@ -54,7 +55,8 @@ public actor ACPWorker: Worker {
             self.connection = connection
             connection.listen { [weak self] in await self?.receive($0, from: connection) }
             let fresh = try await open(connection)
-            run(fresh ? Self.preamble(launch.instructions, brief) : brief)
+            try Task.checkCancellation()
+            run(fresh ? Self.preamble(launch.instructions, brief) : brief, submission: submission)
         } catch {
             busy = false
             queued = []
@@ -66,8 +68,10 @@ public actor ACPWorker: Worker {
         }
     }
 
-    public func steer(_ text: String) async throws {
+    public func steer(_ text: String, submission: UUID?) async throws {
+        try Task.checkCancellation()
         if busy {
+            if let submission { emit.yield(.submitted(submission)) }
             queued.append(text)
             return
         }
@@ -77,10 +81,10 @@ public actor ACPWorker: Worker {
                 launch.sessionID = sessionID
                 launch.resume = true
             }
-            try await start(brief: text)
+            try await start(brief: text, submission: submission)
             return
         }
-        run(text)
+        run(text, submission: submission)
     }
 
     public func resolve(_ requestID: String, _ answer: WorkerAnswer) {
@@ -188,7 +192,8 @@ public actor ACPWorker: Worker {
 
     // MARK: Turns
 
-    private func run(_ text: String) {
+    private func run(_ text: String, submission: UUID?) {
+        if let submission { emit.yield(.submitted(submission)) }
         busy = true
         Task { await self.prompt(text) }
     }

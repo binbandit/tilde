@@ -36,7 +36,7 @@ public actor CodexWorker: Worker, CodexHost {
         (events, emit) = AsyncStream<WorkerEvent>.makeStream(bufferingPolicy: .unbounded)
     }
 
-    public func start(brief: String) async throws {
+    public func start(brief: String, submission: UUID?) async throws {
         let session = CodexSession(cwd: workdir, host: self, executable: executable)
         self.session = session
         Task { await self.relay(session) }
@@ -56,15 +56,15 @@ public actor CodexWorker: Worker, CodexHost {
         }
         threadID = id
         emit.yield(.session(id: id))
-        try await session.send(brief)
+        try await session.send(brief, submission: submission)
     }
 
-    public func steer(_ text: String) async throws {
+    public func steer(_ text: String, submission: UUID?) async throws {
         guard let session, await session.isRunning else {
-            try await start(brief: text)
+            try await start(brief: text, submission: submission)
             return
         }
-        try await session.send(text)
+        try await session.send(text, submission: submission)
     }
 
     public func resolve(_ requestID: String, _ answer: WorkerAnswer) {
@@ -123,7 +123,9 @@ public actor CodexWorker: Worker, CodexHost {
 
     private func relay(_ session: CodexSession) async {
         for await event in session.events {
+            guard session === self.session else { continue }
             switch event {
+            case .submitted(let id): emit.yield(.submitted(id))
             case .itemStarted(let item):
                 if let activity = Self.describe(item) { emit.yield(.activity(activity)) }
             case .message(let text):

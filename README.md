@@ -45,3 +45,15 @@ Requires macOS 27, Xcode 27, and at least one of `claude` / `codex` signed in. t
 | `docs/DESIGN.md` | Product and interaction design |
 | `docs/MEMORY.md` | How tilde remembers |
 | `docs/HARNESSES.md` | How tilde drives Claude Code and Codex, verified against the installed CLIs |
+
+### Bounded automatic approvals
+
+Automatic approval of worker permission requests is **off by default**. For an active job, its review panel offers “Automatically allow folder listings this turn.” This is an owner control, not a manager tool or a notebook rule. It expires at turn completion, a new follow-up, stop, exit, worker replacement, and app restart; it is never enabled by installation.
+
+The exact supported scope is deliberately narrow: a Claude `Bash` permission callback for `/bin/ls '<job workdir>'` or `/bin/ls -1 '<job workdir>'`. The exact absolute job path may also be unquoted when it contains only shell-safe characters. No other arguments, commands, redirects, substitutions, environment changes, or current-directory assumptions are accepted. Listing folder names does not read file contents. An unsupported command still needs approval even if the manager calls it safe.
+
+Only original structured Claude permission data can qualify. Requests without that data, blocked-path requests, sandbox escalation, network, credentials, writes, deletes, arbitrary scripts, builds, tests, and commands outside the exact scope still require the owner. Existing explicitly granted standing rails retain their existing behavior. This policy handles permission requests surfaced to tilde; it does not change the harness's native permissions or sandbox and cannot grant additional access.
+
+Approval buttons are control actions. Decisions remain in the job transcript (`state/jobs/<job>.jsonl`) and task log, without adding “Allow” messages to the ordinary conversation. Successful jobs with a verified empty diff announce completion and offer **Done**. Code changes offer **Bring it in**. A missing or unreadable diff is not evidence of no changes, and failed or cancelled turns cannot be signed off. Acknowledgement retains the worktree for inspection or explicit discard.
+
+The manager reads the root `AGENTS.md` for repository context. Before delegation it checks for new or changed instructions, and every launched or resumed worker gets the current root instructions scoped to its workdir, with a reminder to inspect more-specific files. Repository guidance remains below explicit owner instructions and permission rails. Worker output, external content, and passive observations cannot grant instruction authority or approval.

@@ -52,7 +52,12 @@ emit({"type": "system", "subtype": "init", "cwd": os.getcwd(), "session_id": thr
 for line in sys.stdin:
     text = json.loads(line)["message"]["content"][0]["text"]
     script = text.strip().splitlines()[-1]
-    if script.startswith("gate "):
+    if script == "end-then-result":
+        assistant([{"type": "text", "text": "old result"}], "end_turn")
+        following = json.loads(sys.stdin.readline())
+        emit({"type": "result", "subtype": "success", "is_error": False, "result": "old result"})
+        assistant([{"type": "text", "text": "new result"}], "end_turn")
+    elif script.startswith("gate "):
         command = script[len("gate "):]
         assistant([{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"cmd": command}}], "tool_use")
         is_error, output = bash(command)

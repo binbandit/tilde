@@ -7,7 +7,12 @@ extension Git {
 
     /// Everything the job changed since `base`: commits plus uncommitted and untracked work.
     public static func diffStat(workdir: String, base: String) async -> DiffStat {
-        let numstat = (try? await Shell.check(reading + ["diff", "--numstat", "--no-ext-diff", "--no-textconv", base], cwd: workdir)) ?? ""
+        (try? await checkedDiffStat(workdir: workdir, base: base)) ?? DiffStat(files: 0, insertions: 0, deletions: 0)
+    }
+
+    /// Completion decisions must distinguish an empty diff from an unreadable worktree.
+    public static func checkedDiffStat(workdir: String, base: String) async throws -> DiffStat {
+        let numstat = try await Shell.check(reading + ["diff", "--numstat", "--no-ext-diff", "--no-textconv", base, "--"], cwd: workdir)
         var stat = DiffStat(files: 0, insertions: 0, deletions: 0)
         for line in numstat.split(separator: "\n") {
             let cols = line.split(separator: "\t")
@@ -16,8 +21,8 @@ extension Git {
             stat.insertions += Int(cols[0]) ?? 0
             stat.deletions += Int(cols[1]) ?? 0
         }
-        let untracked = (try? await Shell.check(["git", "ls-files", "--others", "--exclude-standard"], cwd: workdir)) ?? ""
-        for file in untracked.split(separator: "\n") {
+        let untracked = try await Shell.check(reading + ["ls-files", "--others", "--exclude-standard", "-z"], cwd: workdir)
+        for file in untracked.split(separator: "\0") {
             stat.files += 1
             let path = (workdir as NSString).appendingPathComponent(String(file))
             if let text = try? String(contentsOfFile: path, encoding: .utf8), !text.isEmpty {

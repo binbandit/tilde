@@ -16,6 +16,10 @@ protocol StreamDialect: Sendable {
     var interrupt: JSON? { get }
     /// True when the harness exits after a failed turn, so its process is done with as the turn ends.
     var exitsOnFailure: Bool { get }
+    /// Without correlated acceptance, hold follow-ups until the current turn has ended.
+    var serializesPrompts: Bool { get }
+    /// The prompt protocol echoes an id after accepting it, before its run can settle.
+    var acknowledgesPrompts: Bool { get }
 
     /// Writes whatever the harness needs into `scratch` (an existing folder outside the
     /// worktree) and returns the arguments for a process on `session`, or a new session when nil.
@@ -33,6 +37,8 @@ protocol StreamDialect: Sendable {
 extension StreamDialect {
     var interrupt: JSON? { nil }
     var exitsOnFailure: Bool { false }
+    var serializesPrompts: Bool { false }
+    var acknowledgesPrompts: Bool { false }
     func answer(_ call: GateCall, _ verdict: GateVerdict) -> JSON? { nil }
     func answer(_ dialog: StreamDialog, _ reply: WorkerAnswer) -> JSON? { nil }
 }
@@ -47,6 +53,7 @@ enum GateChannel: Sendable {
 
 /// One stdout line, translated.
 enum StreamSignal: Sendable, Equatable {
+    case promptResponse(id: String, accepted: Bool, disposition: String?, error: String?)
     case session(String)
     case activity(String)
     /// A complete assistant message from the main conversation.

@@ -61,7 +61,6 @@ import WorkerKit
             .activity("Handing part of it to a subagent"),
             .activity(Activity.describe(tool: "Bash", input: ["command": .string(command)])),
             .message("Added hello.txt and committed it."), .turnEnded(ok: true),
-            .turnEnded(ok: true),
         ])
 
         // Recorded from the installed amp, which Amp's servers now turn away.
@@ -102,13 +101,14 @@ import WorkerKit
         let signals = try fixture("pi-rpc.jsonl").flatMap(PiDialect().decode)
         let confirm = WorkerQuestion(question: "Run the formatter?\n\nIt rewrites every file.", options: ["Yes", "No"], multiSelect: false)
         #expect(signals == [
+            .promptResponse(id: "t-1", accepted: true, disposition: "started", error: nil),
             .message("On it."), .activity("Writing hello.txt"),
             .gate(GateCall(id: "9b1d-gate", tool: "write", input: ["path": "hello.txt", "content": "hi\n"])),
             .notice("Model hiccup, retrying (attempt 1)"),
             .dialog(StreamDialog(id: "9b1d-confirm", question: confirm, confirm: true)),
             .message("Added hello.txt and committed it."), .turnEnded(ok: true),
-            .failure("Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry."),
-            .turnEnded(ok: false),
+            .promptResponse(id: "t-2", accepted: false, disposition: nil,
+                            error: "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry."),
         ])
     }
 

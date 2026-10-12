@@ -67,6 +67,27 @@ import WorkerKit
         await amp.stop()
     }
 
+    @Test func submissionMarkersRemainOrderedAcrossARestart() async throws {
+        let amp = worker(AmpDialect(), fake: "fake_amp.py", sessionID: "T-earlier")
+        let log = StreamEvents(amp)
+        let first = UUID(), resumed = UUID(), stopped = UUID()
+        try await amp.start(brief: "fail", submission: first)
+        _ = try await log.next(StreamPick.turn)
+        try await amp.steer("carry on", submission: resumed)
+        _ = try await log.next(StreamPick.turn)
+        let order = await log.all.compactMap { event -> String? in
+            switch event {
+            case .submitted(let id): "submitted \(id)"
+            case .turnEnded(let ok, _): "turn \(ok)"
+            default: nil
+            }
+        }
+        #expect(order == ["submitted \(first)", "turn false", "submitted \(resumed)", "turn true"])
+        await amp.stop()
+        await #expect(throws: (any Error).self) { try await amp.steer("stopped", submission: stopped) }
+        #expect(await !log.all.contains { if case .submitted(let id) = $0 { id == stopped } else { false } })
+    }
+
     @Test func ampCrashingMidTurnEndsTheWorker() async throws {
         let amp = worker(AmpDialect(), fake: "fake_amp.py")
         let log = StreamEvents(amp)
@@ -74,6 +95,36 @@ import WorkerKit
         let detail = try await log.next(StreamPick.exit)
         #expect(detail?.hasPrefix("Amp exited (3).") == true)
         await #expect(throws: (any Error).self) { try await amp.steer("hello?") }
+    }
+
+    @Test func ampTrailingSuccessResultCannotCompleteTheNextSubmission() async throws {
+        let amp = worker(AmpDialect(), fake: "fake_amp.py")
+        let log = StreamEvents(amp)
+        let first = UUID(), second = UUID()
+        try await amp.start(brief: "end-then-result", submission: first)
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: true, text: "old result"))
+        try await amp.steer("next", submission: second)
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: true, text: "new result"))
+        #expect(await submissionOrder(log.all) == [
+            "submitted \(first)", "turn true old result", "submitted \(second)", "turn true new result"
+        ])
+        await amp.stop()
+    }
+
+    @Test func ampQueuesBusySubmissionUntilThePrecedingTurnEnds() async throws {
+        let amp = worker(AmpDialect(), fake: "fake_amp.py")
+        let log = StreamEvents(amp)
+        let first = UUID(), second = UUID()
+        try await amp.start(brief: "gate git push origin main", submission: first)
+        let request = try await log.next(StreamPick.request)
+        try await amp.steer("followup", submission: second)
+        #expect(await submissionOrder(log.all) == ["submitted \(first)"])
+        await amp.resolve(request.id, .deny("Not before review."))
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: true, text: "T-fake-0001 heard: followup"))
+        #expect(await submissionOrder(log.all) == [
+            "submitted \(first)", "submitted \(second)", "turn true T-fake-0001 heard: followup"
+        ])
+        await amp.stop()
     }
 
     @Test func ampStopTerminatesARunningTurn() async throws {
@@ -87,6 +138,61 @@ import WorkerKit
     }
 
     // MARK: Pi
+
+    @Test func piPlacesOldSettlementBeforeTheMatchingPromptAcknowledgment() async throws {
+        let pi = worker(PiDialect(), fake: "fake_pi.py", sessionID: "s-order")
+        let log = StreamEvents(pi)
+        let first = UUID(), second = UUID()
+        try await pi.start(brief: "hold-before-settle", submission: first)
+        _ = try await log.next { if case .message(let text) = $0 { text } else { nil } }
+        try await pi.steer("next", submission: second)
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: true, text: "old result"))
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: true, text: "new result"))
+        #expect(await submissionOrder(log.all) == [
+            "submitted \(first)", "turn true old result", "submitted \(second)", "turn true new result"
+        ])
+        await pi.stop()
+    }
+
+    @Test func piExitBeforePendingPromptAcknowledgmentEndsTheWorker() async throws {
+        let pi = worker(PiDialect(), fake: "fake_pi.py", sessionID: "s-exit")
+        let log = StreamEvents(pi)
+        let first = UUID(), pending = UUID()
+        try await pi.start(brief: "hold-before-settle-exit", submission: first)
+        _ = try await log.next { if case .message(let text) = $0 { text } else { nil } }
+        try await pi.steer("next", submission: pending)
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: true, text: "old result"))
+        #expect(try await log.next(StreamPick.exit)?.hasPrefix("Pi exited (3).") == true)
+        #expect(await submissionOrder(log.all) == ["submitted \(first)", "turn true old result"])
+    }
+
+    @Test func piRefusedPromptFailsAfterItsMatchingSubmissionMarker() async throws {
+        let pi = worker(PiDialect(), fake: "fake_pi.py", sessionID: "s-refuse")
+        let log = StreamEvents(pi)
+        let submission = UUID()
+        try await pi.start(brief: "refuse", submission: submission)
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: false, text: "Fixture refused the prompt"))
+        #expect(await submissionOrder(log.all) == ["submitted \(submission)", "turn false Fixture refused the prompt"])
+        await pi.stop()
+    }
+
+    @Test(arguments: ["handled", "unknown"])
+    func piUnverifiedPromptDispositionCannotUseThePreviousTurn(_ disposition: String) async throws {
+        let pi = worker(PiDialect(), fake: "fake_pi.py", sessionID: "s-disposition")
+        let log = StreamEvents(pi)
+        let first = UUID(), second = UUID()
+        try await pi.start(brief: "hold-before-disposition \(disposition)", submission: first)
+        _ = try await log.next { if case .message(let text) = $0 { text } else { nil } }
+        try await pi.steer("next", submission: second)
+        let turn = try await log.next(StreamPick.turn)
+        #expect(!turn.ok)
+        #expect(turn.text.contains("model turn"))
+        await pi.stop()
+        _ = try await log.next(StreamPick.exit)
+        #expect(await submissionOrder(log.all) == [
+            "submitted \(first)", "submitted \(second)", "turn false \(turn.text)"
+        ])
+    }
 
     @Test func piGatesSteersAndAsks() async throws {
         let pi = worker(PiDialect(), fake: "fake_pi.py", sessionID: "s-1")
@@ -134,5 +240,15 @@ import WorkerKit
         #expect(try await log.next(StreamPick.exit) == .some(nil))
         let received = try String(contentsOf: root.appending(path: "fake.log"), encoding: .utf8)
         #expect(received.split(separator: "\n") == ["prompt", "abort"])
+    }
+}
+
+private func submissionOrder(_ events: [WorkerEvent]) -> [String] {
+    events.compactMap {
+        switch $0 {
+        case .submitted(let id): "submitted \(id)"
+        case .turnEnded(let ok, let text): "turn \(ok) \(text)"
+        default: nil
+        }
     }
 }
