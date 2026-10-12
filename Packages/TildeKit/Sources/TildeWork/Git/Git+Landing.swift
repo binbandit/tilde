@@ -10,6 +10,10 @@ extension Git {
     /// current branch, then fast-forward the checkout. Never merges into a dirty tree.
     public static func land(_ job: Job) async throws {
         guard let branch = job.branch else { throw LandFailure(description: "This job worked in place; there's nothing to land.") }
+        let workerBranch = try await currentBranch(job.workdir)
+        guard workerBranch == branch else {
+            throw LandFailure(description: "The job's worktree is on \(workerBranch), but its recorded branch is \(branch). Put the work back on \(branch) before bringing it in.")
+        }
         let repo = job.repoPath
         let target = try await currentBranch(repo)
         guard target != "HEAD" else {
