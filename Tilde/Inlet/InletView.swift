@@ -151,7 +151,7 @@ struct InletActions {
     var unpoint: () -> Void = {}
     /// Tuck the conversation away while keeping its unsent draft.
     var minimize: () -> Void = {}
-    /// A question answer was sent directly to the model; apply the same send behavior.
+    /// You typed an answer to tilde's question: it's put away as a send would be.
     var submitted: () -> Void = {}
 }
 

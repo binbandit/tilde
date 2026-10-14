@@ -9,17 +9,17 @@ struct InletPreferencesSection: View {
         Section {
             Toggle("Minimize after sending", isOn: $minimizeAfterSending)
         } footer: {
-            Text("Completed replies, failed deliveries and new questions still peek out. Turn this off to watch replies as they are written.")
+            Text("Finished replies and new questions still peek out. Turn this off to watch replies as they're written.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
         Section {
-            Toggle("Stay within the notch when hidden", isOn: $stayWithinNotch)
-            Toggle("Hide the ~ indicator when hidden", isOn: $hideMark)
+            Toggle("Stay within the notch", isOn: $stayWithinNotch)
+            Toggle("Hide the ~", isOn: $hideMark)
         } header: {
-            Text("When tilde is hidden")
+            Text("At rest")
         } footer: {
-            Text("Staying within the notch removes both wings on a notched display. The camera housing covers the ~ and job dots, so neither is visible until you open tilde. On other edges and displays, this setting has no effect. Hiding only the ~ keeps job dots visible when tilde can extend beyond the notch.")
+            Text("Within the notch, the camera covers the ~ and job dots until you open tilde. A hidden ~ still shows when something needs you.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }

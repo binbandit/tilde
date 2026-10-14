@@ -78,7 +78,7 @@ struct TildeWords: View {
             }
             if let id = message.attentionID, let item = model.attention.first(where: { $0.id == id }) {
                 // ⌘↩ takes tilde's pick only while nothing's typed: with words in the composer, those are the answer.
-                QuestionOptions(item: item, acceptsReturn: model.openQuestion?.id == id && model.draft.isEmpty, submitted: actions.submitted)
+                QuestionOptions(item: item, acceptsReturn: model.openQuestion?.id == id && model.draft.isEmpty)
             }
             if let settled = message.settled {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
