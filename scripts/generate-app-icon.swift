@@ -1,48 +1,35 @@
 #!/usr/bin/env swift
-import AppKit
+import Foundation
 
-// The same one-period wave as TildeMark, on tilde's pure-black surface.
-// Run from the repository root. No installed bundle or preferences are touched.
-let destination = URL(fileURLWithPath: "Tilde/Assets.xcassets/AppIcon.appiconset", isDirectory: true)
-let slots = [(16, 1), (16, 2), (32, 1), (32, 2), (128, 1), (128, 2), (256, 1), (256, 2), (512, 1), (512, 2)]
-var images: [[String: String]] = []
+// tilde's icon: the same one-period wave as TildeMark, white on its pure-black surface, as an
+// Icon Composer icon. macOS masks it to its own shape; artwork in the older PNG format gets
+// boxed onto a grey plate instead. Run from the repository root (`just icon`).
+let icon = URL(fileURLWithPath: "Tilde/AppIcon.icon", isDirectory: true)
+let assets = icon.appending(path: "Assets")
+try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
 
-for (points, scale) in slots {
-    let pixels = points * scale
-    let image = NSBitmapImageRep(
-        bitmapDataPlanes: nil, pixelsWide: pixels, pixelsHigh: pixels, bitsPerSample: 8,
-        samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
-        bytesPerRow: 0, bitsPerPixel: 0)!
-    let context = NSGraphicsContext(bitmapImageRep: image)!
-    NSGraphicsContext.saveGraphicsState()
-    NSGraphicsContext.current = context
-    let cg = context.cgContext
-    cg.scaleBy(x: CGFloat(pixels) / 1024, y: CGFloat(pixels) / 1024)
-    cg.setAllowsAntialiasing(true)
-    cg.setShouldAntialias(true)
-
-    cg.addPath(CGPath(roundedRect: CGRect(x: 80, y: 80, width: 864, height: 864), cornerWidth: 192, cornerHeight: 192, transform: nil))
-    cg.setFillColor(NSColor.black.cgColor)
-    cg.fillPath()
-
-    let wave = CGMutablePath()
-    for i in 0...192 {
-        let fraction = CGFloat(i) / 192
-        let point = CGPoint(x: 222 + fraction * 580, y: 512 + 110 * sin(2 * .pi * fraction))
-        if i == 0 { wave.move(to: point) } else { wave.addLine(to: point) }
-    }
-    cg.addPath(wave)
-    cg.setStrokeColor(NSColor.white.cgColor)
-    cg.setLineWidth(84)
-    cg.setLineCap(.round)
-    cg.setLineJoin(.round)
-    cg.strokePath()
-    NSGraphicsContext.restoreGraphicsState()
-
-    let filename = "icon_\(points)x\(points)@\(scale)x.png"
-    try image.representation(using: .png, properties: [:])!.write(to: destination.appending(path: filename))
-    images.append(["idiom": "mac", "size": "\(points)x\(points)", "scale": "\(scale)x", "filename": filename])
+// Fine enough to read as a curve at any size. SVG's y runs down, so the wave rises first, like the ~.
+let points = (0...192).map { i in
+    let fraction = Double(i) / 192
+    return String(format: "%.2f %.2f", 168 + fraction * 688, 512 - 130 * sin(2 * .pi * fraction))
 }
-let manifest: [String: Any] = ["images": images, "info": ["author": "xcode", "version": 1]]
+let svg = """
+    <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+      <path d="M\(points.joined(separator: " L"))" fill="none" stroke="#FFFFFF" stroke-width="100" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+
+    """
+try svg.write(to: assets.appending(path: "wave.svg"), atomically: true, encoding: .utf8)
+
+let manifest: [String: Any] = [
+    "fill": ["solid": "srgb:0.00000,0.00000,0.00000,1.00000"],
+    "groups": [[
+        "name": "wave",
+        "layers": [["name": "wave", "image-name": "wave.svg"]],
+        // Black and white, no glass, like the rest of tilde.
+        "translucency": ["enabled": false, "value": 0],
+    ]],
+    "supported-platforms": ["squares": ["macOS"]],
+]
 let data = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
-try (data + Data("\n".utf8)).write(to: destination.appending(path: "Contents.json"))
+try (data + Data("\n".utf8)).write(to: icon.appending(path: "icon.json"))
