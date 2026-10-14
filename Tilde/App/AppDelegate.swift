@@ -14,7 +14,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var notifications = Notifications(model: model, inlet: inlet)
     private let presence = Presence()
     private var lensTracking: Any?
-    private var tapPoint: CGPoint = .zero
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -88,7 +87,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let session = listener.begin()
         voiceSession = session
         finishingVoiceSession = nil
-        tapPoint = point
         holdBegan = .now
         loudest = 0
         model.listening = AppModel.Listening()
