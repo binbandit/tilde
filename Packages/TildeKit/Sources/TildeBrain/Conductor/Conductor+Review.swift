@@ -100,26 +100,39 @@ extension Conductor {
     /// Stops the worker so Brayden can resume its session in a terminal.
     public func takeOver(_ jobID: String) async -> (command: String, cwd: String)? {
         guard let job = jobs.first(where: { $0.id == jobID }), let command = job.takeOverCommand else { return nil }
-        // A git setup that can't be put back stays tilde's to sort out, not the terminal's.
-        let stopped = await stopWorker(jobID).result
-        dropAttention(for: jobID)
-        guard case .success = stopped else {
-            update(jobID) { $0.phase = .stopped }
-            return nil
-        }
-        do {
-            // There may be no worker left, but a previous repair can still be refused, or the setup
-            // can have changed since it stopped. Check it before handing it to the owner's terminal.
-            try await secureGitSetup(job)
-        } catch {
-            update(jobID) { $0.phase = .stopped }
-            needsReview(jobID, error)
-            return nil
-        }
-        update(jobID) { $0.phase = .stopped; $0.ticker = "Taken over" }
-        log.append(jobID, "\(Owner.firstName) took over in a terminal")
-        record(jobID, .you, .event, "Took over in a terminal")
-        return (command, job.workdir)
+        let stopping = stopWorker(jobID)
+        let stops = runs[jobID]?.stops
+        let messages = runs[jobID]?.messages
+        return try? await enqueue(jobID) { [self] () async throws -> (command: String, cwd: String)? in
+            // A newer message or stop wins, even if the message is still waiting in the queue.
+            @MainActor func current() -> Bool {
+                runs[jobID]?.stops == stops && runs[jobID]?.messages == messages
+                    && runs[jobID]?.submission == nil && runs[jobID]?.worker == nil
+            }
+            guard current() else { return nil }
+            let stopped = await stopping.result
+            guard current() else { return nil }
+            dropAttention(for: jobID)
+            guard case .success = stopped else {
+                update(jobID) { $0.phase = .stopped }
+                return nil
+            }
+            do {
+                // An absent worker doesn't mean a previous repair succeeded. Check again before
+                // handing the setup to the owner's terminal, on the same queue as new turns.
+                try await secureGitSetup(job)
+            } catch {
+                guard current() else { return nil }
+                update(jobID) { $0.phase = .stopped }
+                needsReview(jobID, error)
+                return nil
+            }
+            guard current() else { return nil }
+            update(jobID) { $0.phase = .stopped; $0.ticker = "Taken over" }
+            log.append(jobID, "\(Owner.firstName) took over in a terminal")
+            record(jobID, .you, .event, "Took over in a terminal")
+            return (command, job.workdir)
+        }.value
     }
 }
 

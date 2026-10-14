@@ -14,6 +14,8 @@ struct WorkerRun {
     var gitGuard: GitGuard?
     /// Counts stops: a message still waiting in the queue when one comes isn't delivered.
     var stops = 0
+    /// Counts queued messages: newer work supersedes a terminal handoff still being prepared.
+    var messages = 0
     /// The last of the job's work to be queued (see `Conductor.enqueue`).
     var queue: Task<Void, Never>?
     /// The latest stopped worker going, and its git setup being put back (see `Conductor.settle`).
@@ -95,6 +97,7 @@ extension Conductor {
     /// isn't delivered.
     @discardableResult
     func handOver(_ text: String, to jobID: String, resume: Bool? = nil, ticker: String) -> Task<Void, any Error> {
+        runs[jobID, default: WorkerRun()].messages += 1
         let stops = runs[jobID]?.stops ?? 0
         return enqueue(jobID) { [self] in
             guard runs[jobID]?.stops ?? 0 == stops else { throw DeliveryInterrupted() }

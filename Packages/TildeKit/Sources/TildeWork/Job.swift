@@ -103,4 +103,44 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
         createdAt = .now
         updatedAt = .now
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, brief, projectName, repoPath, workdir, harness, model, isolation
+        case branch, baseBranch, baseCommit, sessionID, phase, ticker, summary, diff, lastTurn, pullRequest
+        case createdAt, updatedAt
+    }
+
+    private enum LegacyKeys: String, CodingKey { case acknowledgedAt }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        title = try values.decode(String.self, forKey: .title)
+        brief = try values.decode(String.self, forKey: .brief)
+        projectName = try values.decode(String.self, forKey: .projectName)
+        repoPath = try values.decode(String.self, forKey: .repoPath)
+        workdir = try values.decode(String.self, forKey: .workdir)
+        harness = try values.decode(Harness.self, forKey: .harness)
+        model = try values.decodeIfPresent(String.self, forKey: .model)
+        isolation = try values.decode(Isolation.self, forKey: .isolation)
+        branch = try values.decodeIfPresent(String.self, forKey: .branch)
+        baseBranch = try values.decodeIfPresent(String.self, forKey: .baseBranch)
+        baseCommit = try values.decodeIfPresent(String.self, forKey: .baseCommit)
+        sessionID = try values.decodeIfPresent(String.self, forKey: .sessionID)
+        phase = try values.decode(Phase.self, forKey: .phase)
+        ticker = try values.decode(String.self, forKey: .ticker)
+        summary = try values.decodeIfPresent(String.self, forKey: .summary)
+        diff = try values.decodeIfPresent(DiffStat.self, forKey: .diff)
+        lastTurn = try values.decodeIfPresent(TurnOutcome.self, forKey: .lastTurn)
+        pullRequest = try values.decodeIfPresent(PullRequest.self, forKey: .pullRequest)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        updatedAt = try values.decode(Date.self, forKey: .updatedAt)
+        // Older builds marked acknowledgements as landed, with this timestamp distinguishing them
+        // from actual landings. Without the marker the old state is ambiguous, so landed stays landed.
+        if phase == .landed,
+            try decoder.container(keyedBy: LegacyKeys.self).decodeIfPresent(Date.self, forKey: .acknowledgedAt) != nil
+        {
+            phase = .done
+        }
+    }
 }

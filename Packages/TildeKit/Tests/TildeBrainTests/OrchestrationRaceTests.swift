@@ -174,4 +174,44 @@ import WorkerKit
         #expect(await next.received == ["Second"])
         await conductor.stop(job.id)
     }
+
+    @Test(arguments: [false, true])
+    func newerWorkSupersedesAPendingTakeOver(inRepo: Bool) async throws {
+        let conductor = try await fixture.makeConductor()
+        let old = FakeWorker()
+        let job = try await fixture.delegate(conductor, to: old, inRepo: inRepo)
+        conductor.update(job.id) { $0.sessionID = "fixture-session" }
+        await old.holdStop()
+        let takeover = Task { await conductor.takeOver(job.id) }
+        try await fixture.waitFor { await old.stopped }
+
+        let next = FakeWorker()
+        let (harness, launches) = fixture.harness { _ in next }
+        conductor.update(job.id) { $0.harness = harness }
+        let latest = conductor.handOver("Latest follow-up", to: job.id, ticker: "Working on your message")
+        await old.releaseStop()
+
+        #expect(await takeover.value == nil)
+        try await latest.value
+        #expect(launches.all.count == 1)
+        #expect(await next.received == ["Latest follow-up"])
+        #expect(conductor.job(job.id)?.phase == .working)
+        await conductor.stop(job.id)
+    }
+
+    @Test func aNewerStopSupersedesAPendingTakeOver() async throws {
+        let conductor = try await fixture.makeConductor()
+        let old = FakeWorker()
+        let job = try await fixture.delegate(conductor, to: old, inRepo: false)
+        conductor.update(job.id) { $0.sessionID = "fixture-session" }
+        await old.holdStop()
+        let takeover = Task { await conductor.takeOver(job.id) }
+        try await fixture.waitFor { await old.stopped }
+        let stopping = Task { await conductor.stop(job.id) }
+        try await fixture.waitFor { conductor.job(job.id)?.ticker == "Stopped" }
+        await old.releaseStop()
+        await stopping.value
+        #expect(await takeover.value == nil)
+        #expect(conductor.job(job.id)?.ticker == "Stopped")
+    }
 }
