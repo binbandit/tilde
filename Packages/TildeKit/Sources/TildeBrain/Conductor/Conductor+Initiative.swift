@@ -12,6 +12,7 @@ extension Conductor {
             let focused = perception?.currentContext().repo
             let found = await initiative.look(jobs: jobs, focusedRepo: focused)
             watching = await initiative.watching()
+            terminalAgents = await initiative.terminalAgents
             for (id, reason) in await initiative.moot(attention) { withdraw(id, because: reason) }
             let due = await initiative.due(found, typing: Self.typing, looking: looking)
             if !due.isEmpty { report(due) }

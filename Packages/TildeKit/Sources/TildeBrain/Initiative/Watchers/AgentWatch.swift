@@ -1,38 +1,77 @@
 import Foundation
-import TildeSupport
+import Harnesses
 import TildeWork
+import WorkerKit
 
-/// Only explicitly registered terminal sessions. Lifecycle metadata is enough
-/// to notice a waiting turn; this watcher never opens agent transcripts.
+/// The owner's own coding agents, running in terminals. Only herdr can tell how one is doing, so
+/// only its agents are ever worth a word: one stuck at an approval or a question, and one that
+/// finished work nobody has looked at.
 enum AgentWatch {
-    struct Waiting: Sendable {
-        var identity: String
-        var harness: String
-        var session: String
-        var cwd: String
-        var finishedAt: Date
-        var lastWords: String
+    /// Every agent CLI in the catalog by its program, to find them among the terminal's processes.
+    static var executables: [String: Harness] {
+        Dictionary(HarnessCatalog.all.map { ($0.executable, $0.id) }) { first, _ in first }
     }
 
-    static func waiting(since: Date, quiet: TimeInterval = 5 * 60, own: Set<String> = [],
-                        home: TildeHome = .default, now: Date = .now) -> [Waiting] {
-        let sessions = (try? TerminalAgentRegistry(home: home).sessions(now: now)) ?? []
-        return sessions.filter {
-            $0.state == .waiting && $0.updatedAt > since && now.timeIntervalSince($0.updatedAt) > quiet
-                && !own.contains($0.session) && !$0.isStale(now: now)
-        }.map {
-            Waiting(identity: $0.adapter.rawValue + ":" + $0.id, harness: $0.adapter.name, session: $0.session, cwd: $0.cwd,
-                    finishedAt: $0.updatedAt, lastWords: "Turn completed (reported by the project's opt-in hook).")
+    /// What's worth a word, comparing this look with the last. An agent blocked at both, with no change
+    /// in between, has waited a minute or more, so the owner isn't busy answering it. One newly `done`
+    /// finished unseen (herdr calls it idle once someone has looked). An agent seen for the first time
+    /// is only learned.
+    static func notices(_ agents: [TerminalAgent], before: [TerminalAgent]) -> [Notice] {
+        let last = Dictionary(before.map { ($0.id, $0) }) { $1 }
+        return agents.compactMap { agent in
+            guard let previous = last[agent.id] else { return nil }
+            let unchanged = previous.state == agent.state && previous.changes == agent.changes
+            switch agent.state {
+            case .blocked where unchanged:
+                return notice(agent, .soon, "is waiting on you: an approval or a question")
+            case .done where !unchanged:
+                return notice(agent, .fyi, "finished and is waiting for you")
+            default:
+                return nil
+            }
         }
+    }
+
+    /// A notice about an agent stands while the agent stays as it was when it was noticed.
+    static func key(_ agent: TerminalAgent) -> String { "terminal:\(agent.id):\(agent.state.rawValue):\(agent.changes)" }
+
+    static func describe(_ agents: [TerminalAgent]) -> String {
+        "Your own coding agents, running in terminals (not tilde's jobs):\n" + agents.prefix(20).map(\.line).joined(separator: "\n")
+    }
+
+    private static func notice(_ agent: TerminalAgent, _ urgency: Notice.Urgency, _ what: String) -> Notice {
+        Notice(key: key(agent), subject: "terminal:\(agent.id)", urgency: urgency, summary: "\(agent.described) \(what).", project: agent.cwd)
     }
 }
 
-extension AgentWatch.Waiting {
-    var notice: Notice {
-        Notice(
-            key: "agent:\(identity):\(Int(finishedAt.timeIntervalSince1970))", subject: "agent:\(identity)",
-            urgency: .fyi,
-            summary: "\(harness) in \((cwd as NSString).abbreviatingWithTildeInPath) reported a completed turn and is waiting for you.",
-            project: cwd, suggestion: nil)
+extension Initiative {
+    /// Takes in a fresh look at the owner's own agents and returns what changed since the last one,
+    /// withdrawing anything held about an agent that has moved on.
+    func saw(_ agents: [TerminalAgent]) -> [Notice] {
+        let found = AgentWatch.notices(agents, before: terminalAgents)
+        let standing = Set(agents.map(AgentWatch.key))
+        held.removeAll { $0.subject.hasPrefix("terminal:") && !standing.contains($0.key) }
+        terminalAgents = agents
+        return found
+    }
+}
+
+extension TerminalAgent {
+    /// Which agent, where: "Claude Code in ~/Developer/shop (herdr pane w2:p1)".
+    var described: String {
+        var at = place.label
+        if case .herdr(let pane) = place { at += " pane \(pane)" + (name.map { ", named \($0)" } ?? "") }
+        return "\(harness.label) in \((cwd as NSString).abbreviatingWithTildeInPath) (\(at))"
+    }
+
+    var line: String {
+        let doing = switch state {
+        case .working: "working"
+        case .blocked: "waiting on an approval or a question"
+        case .done: "finished, not looked at yet"
+        case .idle: "idle"
+        case .unknown: "running"
+        }
+        return "- \(described): \(doing)"
     }
 }

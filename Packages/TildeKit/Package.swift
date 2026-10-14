@@ -8,7 +8,6 @@ let package = Package(
     products: [
         .library(name: "TildeKit", targets: ["TildeKit"]),
         .executable(name: "tilde-smoke", targets: ["TildeSmoke"]),
-        .executable(name: "tilde-agent-hook", targets: ["TildeAgentHook"]),
     ],
     targets: [
         // Foundations with no domain knowledge: processes, JSON, logging, paths.
@@ -45,7 +44,6 @@ let package = Package(
             dependencies: ["TildeBrain", "TildeWork", "TildeMemory", "Harnesses", "WorkerKit", "TildeSupport"]),
 
         .executableTarget(name: "TildeSmoke", dependencies: ["TildeKit"]),
-        .executableTarget(name: "TildeAgentHook", dependencies: ["TildeWork", "TildeSupport"]),
 
         .testTarget(name: "TildeSupportTests", dependencies: ["TildeSupport"]),
         .testTarget(name: "WorkerKitTests", dependencies: ["WorkerKit", "TildeSupport"]),
@@ -55,7 +53,7 @@ let package = Package(
         .testTarget(name: "StreamWorkersTests", dependencies: ["StreamWorkers", "WorkerKit", "TildeSupport"], exclude: ["Fixtures"]),
         .testTarget(name: "HarnessesTests", dependencies: ["Harnesses", "WorkerKit"]),
         .testTarget(name: "TildeMemoryTests", dependencies: ["TildeMemory", "TildeSupport"]),
-        .testTarget(name: "TildeWorkTests", dependencies: ["TildeWork", "WorkerKit", "TildeSupport"]),
+        .testTarget(name: "TildeWorkTests", dependencies: ["TildeWork", "WorkerKit", "TildeSupport"], exclude: ["Fixtures"]),
         .testTarget(
             name: "TildeBrainTests",
             dependencies: ["TildeBrain", "Harnesses", "TildeMemory", "TildeWork", "WorkerKit", "TildeSupport"],

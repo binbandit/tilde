@@ -41,9 +41,8 @@ extension Initiative {
         seen.briefed.map { now.timeIntervalSince($0) < 20 * 60 } ?? false
     }
 
-    /// The latest of what the watchers saw: PRs, agents waiting, and what's held back for later.
+    /// The latest of what the watchers saw: PRs, the owner's own agents, and what's held back for later.
     func watching() -> String {
-        refreshTerminalAgents()
         var sections: [String] = []
         let open = pulls.filter { $0.isMine && !$0.merged }
         // Only the most recently updated are here; a count says how many there are in all.
@@ -55,10 +54,7 @@ extension Initiative {
         for (title, pulls) in groups where !pulls.isEmpty {
             sections.append("\(title):\n" + pulls.map(\.line).joined(separator: "\n"))
         }
-        if !waiting.isEmpty {
-            sections.append("Coding agents waiting on you:\n" + waiting.map(\.line).joined(separator: "\n"))
-        }
-        if !terminalAgents.isEmpty { sections.append(terminalDescription) }
+        if !terminalAgents.isEmpty { sections.append(AgentWatch.describe(terminalAgents)) }
         if !held.isEmpty {
             sections.append("Noticed, not yet said:\n" + held.map { "- [\($0.urgency.rawValue)] \($0.summary)" }.joined(separator: "\n"))
         }
@@ -76,41 +72,8 @@ extension Initiative {
         return watching()
     }
 
-    /// Pull requests and agent sessions that changed since `date`, for the morning brief.
+    /// Pull requests that changed since `date`, for the morning brief.
     func changes(since date: Date) -> [String] {
         pulls.filter { ($0.updatedAt ?? .distantPast) > date }.map(\.line)
-            + AgentWatch.waiting(since: date, own: ownSessions, home: home).map(\.line)
-    }
-
-    /// Read only the local opted-in event store, including when a tap arrives
-    /// before the next background poll. Never connect to or resume these agents.
-    func refreshTerminalAgents(now: Date = .now) {
-        terminalAgents = ((try? TerminalAgentRegistry(home: home).sessions(now: now)) ?? [])
-            .filter { !ownSessions.contains($0.session) }
-        waiting = Array(AgentWatch.waiting(since: now.addingTimeInterval(-3 * 3600), own: ownSessions, home: home, now: now).prefix(20))
-        let currentNotices = Set(waiting.map { $0.notice.key })
-        held.removeAll { $0.subject.hasPrefix("agent:") && !currentNotices.contains($0.key) }
-    }
-
-    func terminalAgentContext(own: Set<String>) -> String {
-        ownSessions = own
-        refreshTerminalAgents()
-        return terminalAgents.isEmpty ? "" : terminalDescription
-    }
-
-    private var terminalDescription: String {
-        "Connected terminal agents (last observed events, not managed jobs; no control or permission to take over):\n"
-            + terminalAgents.prefix(20).map { session in
-                "- \(session.adapter.name) in \(session.cwd.clipped(to: 400)): \(session.state.rawValue), observed "
-                    + session.updatedAt.formatted(.relative(presentation: .named))
-                    + (session.isStale() ? "; stale, current state unknown" : "")
-            }.joined(separator: "\n")
-            + (terminalAgents.count > 20 ? "\n(Showing the 20 most recent of \(terminalAgents.count) observations.)" : "")
-    }
-}
-
-extension AgentWatch.Waiting {
-    var line: String {
-        "- \(harness) in \((cwd as NSString).abbreviatingWithTildeInPath) finished \(finishedAt.formatted(.relative(presentation: .named))): \(lastWords)"
     }
 }

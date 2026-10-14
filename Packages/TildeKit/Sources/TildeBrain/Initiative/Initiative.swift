@@ -47,12 +47,8 @@ public actor Initiative {
     var polledAt = Date.distantPast
     /// The poll the open questions were last checked against.
     var mootCheckedAt = Date.distantPast
-    /// Agents that the last look found waiting on the owner.
-    var waiting: [AgentWatch.Waiting] = []
-    /// Last lifecycle observations from explicitly connected terminal projects.
-    var terminalAgents: [TerminalAgentSession] = []
-    /// The sessions of tilde's own jobs, which aren't the owner's agents to be reminded of.
-    var ownSessions: Set<String> = []
+    /// The owner's own agents in terminals, as the last look found them.
+    var terminalAgents: [TerminalAgent] = []
     /// How many PRs the owner has open in all, of which `pulls` holds the most recently updated.
     var openTotal = 0
     /// The owner's checkouts, to find a PR's by its repo.
@@ -128,9 +124,8 @@ public actor Initiative {
         }
         found += nudges(pulls, focusedRepo: focusedRepo)
         found += JobWatch.notices(jobs)
-        ownSessions = Set(jobs.compactMap(\.sessionID))
-        refreshTerminalAgents()
-        found += waiting.map(\.notice)
+        let own = Set(jobs.filter(\.phase.isActive).compactMap(\.sessionID))
+        found += saw(await TerminalAgents.observe(executables: AgentWatch.executables, own: own))
         if !seen.baselined {
             seen.baselined = true
             for observation in found { seen.raised[observation.key] = .now }

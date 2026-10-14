@@ -35,6 +35,7 @@ final class AppModel {
         var attention: [Attention] = []
         var transcripts: [String: [JobEntry]] = [:]
         var diff = ""
+        var terminalAgents: [TerminalAgent] = []
     }
 
     init() {
@@ -51,6 +52,8 @@ final class AppModel {
     var earlier: [Message] { fixture?.earlier ?? conductor?.earlier ?? [] }
     var jobs: [Job] { fixture?.jobs ?? conductor?.jobs ?? [] }
     var attention: [Attention] { fixture?.attention ?? conductor?.attention ?? [] }
+    /// Your own coding agents, running in terminals.
+    var terminalAgents: [TerminalAgent] { fixture?.terminalAgents ?? conductor?.terminalAgents ?? [] }
 
     /// The jobs to keep in view: open ones, and failed ones with a worktree or scratch folder still to look at
     /// or discard (work done in place has nothing of its own to clear).
@@ -164,7 +167,13 @@ final class AppModel {
     /// Stops the worker and resumes its session in your terminal.
     func takeOver(_ job: Job) async {
         guard fixture == nil, let (command, cwd) = await conductor?.takeOver(job.id) else { return }
-        Terminal.run(command, in: cwd)
+        await Terminal.takeOver(command, in: cwd, title: job.title, name: job.id)
+    }
+
+    /// Brings one of your own agents forward: its herdr pane, or the terminal it runs in.
+    func focus(_ agent: TerminalAgent) {
+        guard fixture == nil else { return }
+        Task { await Terminal.focus(agent) }
     }
 
     // MARK: Editors
@@ -187,8 +196,42 @@ final class AppModel {
     }
 }
 
-/// Opens your terminal running a command.
+/// Your terminal: where a session you take over goes, and where your own agents run.
 enum Terminal {
+    /// Resumes a session in herdr when it's installed, in a workspace of its own beside your other agents;
+    /// otherwise in a new terminal window.
+    static func takeOver(_ command: String, in cwd: String, title: String, name: String) async {
+        guard Herdr.isInstalled else { return run(command, in: cwd) }
+        // With no herdr client open, one is opened first: it starts herdr's server if that isn't running.
+        let client = await Herdr.clientApp()
+        if client == nil { run("herdr", in: cwd) }
+        do {
+            try await Herdr.resume(command, in: cwd, label: title, name: name)
+            if let client { activate(client) }
+        } catch {
+            Log.info("terminal", "herdr couldn't take over \(name): \(error)")
+            run(command, in: cwd)
+        }
+    }
+
+    static func focus(_ agent: TerminalAgent) async {
+        switch agent.place {
+        case .herdr(let pane):
+            await Herdr.focus(pane: pane)
+            if let client = await Herdr.clientApp() { activate(client) } else { run("herdr", in: agent.cwd) }
+        case .terminal(_, let app):
+            if let app { activate(app) }
+        }
+    }
+
+    /// Brings a running app forward, from tilde's non-activating panels too.
+    private static func activate(_ app: String) {
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: URL(fileURLWithPath: app), configuration: config)
+    }
+
+    /// Opens a new terminal window running `command` in `cwd`: Ghostty when it's installed, else Terminal.
     static func run(_ command: String, in cwd: String) {
         if let ghostty = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.mitchellh.ghostty") {
             let config = NSWorkspace.OpenConfiguration()

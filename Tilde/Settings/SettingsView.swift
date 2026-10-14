@@ -70,7 +70,6 @@ struct SettingsView: View {
             }
             InletPreferencesSection()
             SourcesSection()
-            TerminalAgentsSection()
             Section {
                 Picker("Talk to tilde", selection: $trigger) {
                     ForEach(Trigger.allCases, id: \.self) { Text(label($0)).tag($0.rawValue) }

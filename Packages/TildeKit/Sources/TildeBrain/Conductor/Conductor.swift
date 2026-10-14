@@ -35,6 +35,8 @@ public final class Conductor {
     public internal(set) var trouble: String?
     /// The conversations of jobs someone is looking at (`loadTranscript`), by job id.
     public internal(set) var transcripts: [String: [JobEntry]] = [:]
+    /// The owner's own coding agents in terminals, as the watchers last saw them.
+    public internal(set) var terminalAgents: [TerminalAgent] = []
 
     @ObservationIgnored public let signals: AsyncStream<Signal>
     @ObservationIgnored let signal: AsyncStream<Signal>.Continuation
