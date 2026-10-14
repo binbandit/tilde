@@ -82,7 +82,12 @@ install destination="": (build "Release")
             if [[ "$running" != 0 ]]; then open -n "$target" || true; fi
         fi
     }
-    if [[ -e "$target" || -L "$target" ]]; then mv -- "$target" "$previous"; fi
+    if [[ -e "$target" || -L "$target" ]]; then
+        if ! mv -- "$target" "$previous"; then
+            if [[ "$running" != 0 ]]; then open -n "$target" || true; fi
+            exit 1
+        fi
+    fi
     if ! mv -- "$stage/tilde.app" "$target"; then restore; exit 1; fi
     if ! open -n "$target"; then
         # A failed launch may still have started; stop it before restoring the old bundle.
