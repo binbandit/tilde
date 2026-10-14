@@ -45,6 +45,7 @@ Requires macOS 27, Xcode 27, and at least one of `claude` / `codex` signed in. t
 | `docs/DESIGN.md` | Product and interaction design |
 | `docs/MEMORY.md` | How tilde remembers |
 | `docs/HARNESSES.md` | How tilde drives Claude Code and Codex, verified against the installed CLIs |
+| `docs/TERMINAL_AGENTS.md` | The agents you run yourself, in herdr or any terminal |
 
 ### Bounded automatic approvals
 

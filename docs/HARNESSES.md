@@ -11,7 +11,7 @@ tilde drives the agent CLIs you already use, unmodified and with your own logins
 
 Everything below was verified against the installed CLIs (Claude Code 2.1.294, Codex 0.160.1) with throwaway repos on 2026-10-08.
 
-For independently started terminal agents, see [opt-in terminal discovery](TERMINAL_AGENTS.md). It uses project-scoped Claude, Codex, and Gemini lifecycle hooks and observes metadata only. This is separate from the worker protocols below; ACP or stream support alone does not imply passive discovery of another terminal's session.
+Agents you start yourself, in herdr or any other terminal, are a different thing: tilde finds them with no setup and can take a job over into herdr. See [terminal agents](TERMINAL_AGENTS.md).
 
 ## Claude Code
 
