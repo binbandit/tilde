@@ -22,11 +22,14 @@ public enum Shell {
         }
     }
 
+    /// How long a timed-out or cancelled command gets after SIGTERM before SIGKILL. These stop at once.
+    static let grace = Duration.milliseconds(100)
+
     /// Runs `command` (argv[0] resolved on the user's PATH) and returns its output. Past `timeout`
     /// it's stopped, and the output says so.
     public static func run(
         _ command: [String], cwd: String? = nil, environment: [String: String] = UserEnvironment.shared.variables,
-        input: String? = nil, timeout: Duration? = nil
+        timeout: Duration? = nil
     ) async throws -> Output {
         try Task.checkCancellation()
         guard let executable = command.first else { throw ChildProcess.Failure.notFound("") }
@@ -35,28 +38,24 @@ public enum Shell {
             .init(executable: executable, arguments: Array(command.dropFirst()),
                   cwd: cwd ?? FileManager.default.currentDirectoryPath, environment: environment),
             stdout: { chunk in output.withLock { $0.stdout.append(chunk) } },
-            stderr: { chunk in output.withLock { $0.stderr.append(chunk) } })
+            stderr: { chunk in output.withLock { $0.stderr.append(chunk) } },
+            // A command may leave something running on purpose (git's daemons); a deadline still stops it.
+            stopsGroupOnExit: false)
+        process.closeStdin()
+        @Sendable func stop() async {
+            await process.terminate(grace: grace)
+            process.stopOutput()
+        }
         let deadline = timeout.map { timeout in
             Task {
                 do { try await Task.sleep(for: timeout) } catch { return }
                 guard !process.isFinished else { return }
                 output.withLock { $0.timedOut = true }
-                await process.terminate(grace: .milliseconds(100))
-                process.stopOutput()
+                await stop()
             }
         }
         defer { deadline?.cancel() }
         return try await withTaskCancellationHandler {
-            do {
-                if let input { try process.write(Data(input.utf8)) }
-            } catch {
-                await process.terminate(grace: .milliseconds(100))
-                process.stopOutput()
-                // A deadline/cancellation can close a pipe while a large input is being
-                // written. Report that cause, rather than replacing it with stdinClosed.
-                if !output.withLock({ $0.timedOut }) && !Task.isCancelled { throw error }
-            }
-            process.closeStdin()
             let status = await process.waitForExit()
             await process.waitForOutput()
             try Task.checkCancellation()
@@ -65,10 +64,7 @@ public enum Shell {
                        stderr: String(decoding: $0.stderr, as: UTF8.self), timedOut: $0.timedOut)
             }
         } onCancel: {
-            Task {
-                await process.terminate(grace: .milliseconds(100))
-                process.stopOutput()
-            }
+            Task { await stop() }
         }
     }
 
@@ -80,5 +76,10 @@ public enum Shell {
         let output = try await run(command, cwd: cwd, environment: environment)
         guard output.ok else { throw Failed(command: command, output: output) }
         return output.trimmed
+    }
+
+    /// `text` as a single word for sh.
+    public static func quote(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 }
