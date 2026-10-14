@@ -40,13 +40,10 @@ public struct WorkerRequest: Sendable, Identifiable {
 
     public let id: String
     public var kind: Kind
-    /// Original harness permission data. Nil means the request cannot be automatically approved.
-    public let permissionContext: PermissionContext?
 
-    public init(id: String, kind: Kind, permissionContext: PermissionContext? = nil) {
+    public init(id: String, kind: Kind) {
         self.id = id
         self.kind = kind
-        self.permissionContext = permissionContext
     }
 
     /// One line naming what is being asked, for logs and prompts.

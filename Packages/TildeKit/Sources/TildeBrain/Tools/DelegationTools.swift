@@ -17,7 +17,7 @@ extension Conductor {
     var delegateTool: AgentTool {
         AgentTool(
             "delegate",
-            "Start a worker. With a project it works in its own git worktree; without one (GUI work, research) it gets a scratch folder. Newly discovered or changed root AGENTS.md instructions are returned for you to read and reconcile before retrying; no job starts on that response. Returns the job id on success.",
+            "Start a worker. With a project it works in its own git worktree; without one (GUI work, research) it gets a scratch folder. Returns the job id.",
             schema: AgentTool.object([
                 "project_path": .text("Absolute path of the project's git repo. Omit for work that isn't about a repo."),
                 "title": .text("2 to 5 words naming the job the way a person would, e.g. 'Navigation bar', 'oh-fx#799 conflicts'. Not 'Fix PRs 796 799'."),
@@ -28,7 +28,6 @@ extension Conductor {
                 ],
                 "model": .text("Only when a specific model is wanted: its name as the harness knows it. Omit for the harness's default."),
                 "in_place": ["type": "boolean", "description": "Work directly in the checkout instead of a worktree. Only when asked."],
-                "repository_revision": .text("Echo the token returned by repository preflight after reading its instructions and reconciling this action."),
             ], required: ["title", "brief"])
         ) { args in await self.toolDelegate(args) }
     }
@@ -37,10 +36,7 @@ extension Conductor {
         AgentTool(
             "steer",
             "Send a follow-up instruction or feedback to a job's worker.",
-            schema: AgentTool.object([
-                "job": .text("Job id."), "message": .text("What to tell the worker."),
-                "repository_revision": .text("Echo the token returned by repository preflight after reading its instructions and reconciling this action."),
-            ], required: ["job", "message"])
+            schema: AgentTool.object(["job": .text("Job id."), "message": .text("What to tell the worker.")], required: ["job", "message"])
         ) { args in await self.toolSteer(args) }
     }
 
@@ -84,9 +80,6 @@ extension Conductor {
                 return try await launch(job, spec: spec, brief: brief, place: "a scratch folder (\(workdir))")
             }
             let repo = try await Git.root(of: (path as NSString).expandingTildeInPath)
-            if let instructions = await manager.prepareRepositoryWork(repository: repo, revision: args["repository_revision"]?.string) {
-                return .error(instructions)
-            }
             let projectName = (repo as NSString).lastPathComponent
             if inPlace {
                 job = Job(id: id, title: title, brief: brief, projectName: projectName, repoPath: repo, workdir: repo,
@@ -120,7 +113,7 @@ extension Conductor {
         log.open(job)
         record(job.id, .tilde, .message, brief)
         log.journal("Started \(job.title) in \(job.projectName) with \(spec.label) (\(job.id))")
-        try await spawn(job, brief: brief, resume: false)
+        try await handOver(brief, to: job.id, resume: false, ticker: "Starting").value
         return .ok("Started \(job.id) with \(spec.label) in \(place).")
     }
 
@@ -139,12 +132,11 @@ extension Conductor {
 
     private func toolStop(_ args: JSON) async -> ToolResult {
         guard let id = args["job"]?.string, job(id) != nil else { return .error("No such job.") }
-        let stopped = await stopWorker(id)
-        if let paths = gitGuardFailures[id] { return .error(GitIntegrityFailure(paths: paths).description) }
-        guard workerGenerations[id] == stopped else { return .ok("Newer work has already restarted this job.") }
+        let stopping = stopWorker(id)
         update(id) { $0.phase = .stopped; $0.ticker = "Stopped" }
         record(id, .tilde, .event, "Stopped")
         log.append(id, "Stopped by the manager")
+        if case .failure(let error) = await stopping.result { return .ok("Stopped \(id). \(error)") }
         return .ok("Stopped \(id).")
     }
 }

@@ -21,10 +21,7 @@ extension Conductor {
         AgentTool(
             "finish",
             "Sign off a job as complete and ready for \(Owner.firstName) to review.",
-            schema: AgentTool.object([
-                "job": .text("Job id."), "summary": .text("1 to 3 sentences: what changed and anything to check."),
-                "repository_revision": .text("Echo the token returned by repository preflight after reading its instructions and reconciling this action."),
-            ], required: ["job", "summary"])
+            schema: AgentTool.object(["job": .text("Job id."), "summary": .text("1 to 3 sentences: what changed and anything to check.")], required: ["job", "summary"])
         ) { args in await self.toolFinish(args) }
     }
 
@@ -43,13 +40,9 @@ extension Conductor {
             return .error("request and decision are required.")
         }
         guard let pending = requests[id] else { return .error("Request \(id) is no longer open.") }
-        guard ["allow", "deny", "answer"].contains(decision) else { return .error("decision must be allow, deny, or answer.") }
-        if case .permission = pending.request.kind, decision == "answer" {
-            return .error("A permission requires allow or deny; a text answer cannot approve it.")
-        }
-        if decision == "allow", let reason = approvalBlock(pending.request, job: pending.job) {
+        if decision == "allow", let rail = unallowedRail(pending.request, job: pending.job) {
             return .error(
-                "\(reason) It's \(Owner.firstName)'s to allow. Deny it, or `ask` them, "
+                "That crosses a rail (\(rail)), so it's \(Owner.firstName)'s to allow, not yours. Deny it, or `ask` them, "
                     + "passing request \"\(id)\", with what you'd pick and why.")
         }
         let text = args["text"]?.string ?? ""
@@ -59,32 +52,42 @@ extension Conductor {
             case "deny": .deny(text.isEmpty ? "Not allowed." : text)
             default: .reply(text)
             }
-        guard resolve(id, answer, by: .tilde) else { return .error("The request cannot be answered: its worker stopped, its job is inactive, or permission is not authorized.") }
+        guard resolve(id, answer, by: .tilde) else {
+            return .error("Its worker has stopped, or that isn't an answer it takes: a permission takes allow or deny, a question an answer.")
+        }
         return .ok("Done.")
     }
 
     private func toolFinish(_ args: JSON) async -> ToolResult {
-        guard let id = args["job"]?.string, let job = job(id) else { return .error("No such job.") }
-        guard gitGuardFailures[id] == nil, gitCleanups[id] == nil, canFinish(id), let ended = turnEnded[id] else {
-            return .error("The job must finish a successful turn with no pending questions before sign-off.")
-        }
+        guard let id = args["job"]?.string, job(id) != nil else { return .error("No such job.") }
         let summary = args["summary"]?.string ?? ""
+        do {
+            // On the job's queue, so no new turn starts while its work is checked and signed off.
+            return .ok(try await enqueue(id) { [self] in try await finish(id, summary: summary) }.value)
+        } catch {
+            return .error("\(error)")
+        }
+    }
+
+    /// Signs the job off, and says how it went.
+    private func finish(_ id: String, summary: String) async throws -> String {
+        guard canFinish(id), let job = job(id) else {
+            throw ActionRefused(description: "The job must finish a successful turn with no pending questions before sign-off.")
+        }
         var diff: DiffStat?
         if job.isolation != .scratch {
-            guard let base = job.baseCommit else { return .error("The job's change baseline is unknown.") }
+            guard let base = job.baseCommit else { throw ActionRefused(description: "The job's change baseline is unknown.") }
             do {
                 diff = try await Git.diffStat(workdir: job.workdir, base: base)
             } catch {
-                return .error("Couldn't verify the job's changes: \(error)")
+                throw ActionRefused(description: "Couldn't verify the job's changes: \(error)")
             }
         }
-        // Inspection suspends: stop, cancellation, or new feedback invalidates this sign-off.
-        guard !Task.isCancelled, canFinish(id), turnEnded[id] == ended else {
-            return .error("The job changed while its completion was being checked.")
-        }
-        let acknowledgement = job.isolation != .worktree || diff?.isEmpty == true
-        let status = acknowledgement ? "Complete" : "Ready for review"
-        automaticApprovalJobs.remove(id)
+        // Stopped, exited or asking something by now: not done after all.
+        guard canFinish(id) else { throw ActionRefused(description: "The job changed while its completion was being checked.") }
+        // With nothing to bring in, it's announced here, and the owner only acknowledges it.
+        let complete = job.isolation != .worktree || diff?.isEmpty == true
+        let status = complete ? "Complete" : "Ready for review"
         mention(id)
         update(id) {
             $0.phase = .ready
@@ -92,33 +95,21 @@ extension Conductor {
             $0.diff = diff
             $0.ticker = status
         }
-        let signedOffAt = self.job(id)?.updatedAt
-        if job.harness.spec?.resumeCommand != nil {
-            await stopWorker(id)
-        }
-        // Stopping a harness can take seconds. New owner feedback during that wait is new work,
-        // and must not be followed by a stale completion announcement or outcome record.
-        guard gitGuardFailures[id] == nil, deliveriesInFlight[id] == nil,
-            self.job(id)?.phase == .ready, self.job(id)?.updatedAt == signedOffAt else {
-            return .error("The job received new work while completion was being prepared.")
-        }
-        guard !Task.isCancelled else {
-            update(id) { $0.phase = .stopped; $0.ticker = "Completion interrupted" }
-            return .error("Completion was cancelled.")
-        }
         log.outcome(id, "\(summary)\n\nChanges: \(diff?.label ?? "not a code job")")
         record(id, .tilde, .event, "\(status): \(summary)")
         log.journal("\(job.title) in \(job.projectName): \(status.lowercased()) (\(id))")
-        if acknowledgement { emit(.said("\(job.title) is complete. \(summary)", jobID: id)) }
+        if complete { emit(.said("\(job.title) is complete. \(summary)", jobID: id)) }
+        // Its agent can rest, if a message to the job can pick its session back up (otherwise it would
+        // start over knowing nothing).
+        if job.harness.spec?.resumeCommand != nil { await retire(id)?.stop() }
         await memory.notebook.commitChanges(context: "\(id) complete")
         Task { await scribe.reflect(on: "A job finished. Project: \(job.projectName). Brief: \(job.brief)\nOutcome: \(summary)") }
-        return .ok("\(id): \(status.lowercased())." + (acknowledgement ? " Completion was announced; there is nothing to bring in." : ""))
+        return "\(id): \(status.lowercased())." + (complete ? " Completion was announced; there is nothing to bring in." : "")
     }
 
+    /// Its worker's latest turn went well, and nothing it or tilde asked is still open.
     private func canFinish(_ id: String) -> Bool {
-        guard let job = job(id), [.deciding, .needsYou].contains(job.phase), successfulTurns.contains(id),
-            deliveriesInFlight[id, default: 0] == 0,
-            let ended = turnEnded[id], (handed[id] ?? .distantPast) <= ended else { return false }
+        guard let job = job(id), [.deciding, .needsYou].contains(job.phase), job.lastTurn == .succeeded else { return false }
         return !requests.values.contains { $0.job == id } && !attention.contains { $0.jobID == id }
     }
 
