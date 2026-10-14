@@ -80,6 +80,7 @@ struct ConversationView: View {
                 Image(systemName: "ellipsis").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text3)
             }
             .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
             .fixedSize()
             .help("Chat history")
             .accessibilityLabel("Chat history")

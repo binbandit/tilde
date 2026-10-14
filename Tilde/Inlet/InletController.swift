@@ -56,14 +56,7 @@ final class InletController {
         InletActions(
             send: { [weak self] in self?.send($0) },
             openJob: { [weak self] in self?.openJob($0) },
-            compose: { [weak self] in
-                guard let self else { return }
-                if self.inlet.mode != .compose, self.exchangeTarget == nil {
-                    self.composeCapturingContext()
-                } else {
-                    self.set(.compose)
-                }
-            },
+            compose: { [weak self] in self?.reachForComposer() },
             dismiss: { [weak self] in self?.dismiss() },
             unpoint: { [weak self] in self?.unpoint() },
             minimize: { [weak self] in self?.minimize() },
@@ -96,6 +89,10 @@ final class InletController {
             // A fullscreen space hides the menu bar, which a top Inlet sizes itself to.
             NSWorkspace.shared.notificationCenter.addObserver(
                 forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main, using: place),
+            // Clicking into the open Inlet's composer is reaching for it.
+            center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: panel, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { if self?.inlet.mode == .open { self?.reachForComposer() } }
+            },
             // Clicking away from the composer or a review puts the Inlet back to rest.
             center.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.resignedKey() }
@@ -140,7 +137,7 @@ final class InletController {
         if mode == .rest { exchangeTarget = nil }
         // Held news is told while you're looking.
         model.conductor?.looking = inlet.isConversation
-        panel?.acceptsKey = inlet.wantsKey && focus
+        panel?.acceptsKey = inlet.canType
         if inlet.wantsKey && focus, let panel {
             NSApp.activate()
             panel.makeKey()
@@ -251,6 +248,16 @@ final class InletController {
             guard let self, self.inlet.mode == .compose else { return }
             self.exchangeTarget = referent
             if point != nil, let referent { self.lens.flash(on: referent) }
+        }
+    }
+
+    /// You reached for the composer in the open Inlet: it takes the keyboard, and the app
+    /// you were in comes along as "this" unless something is already pointed at.
+    private func reachForComposer() {
+        if inlet.mode != .compose, exchangeTarget == nil {
+            composeCapturingContext()
+        } else {
+            set(.compose)
         }
     }
 

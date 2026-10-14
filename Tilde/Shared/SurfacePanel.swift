@@ -9,6 +9,8 @@ final class SurfacePanel: NSPanel {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView], backing: .buffered, defer: true)
         // Before the level: making a panel floating resets its level to .floating.
         isFloatingPanel = true
+        // A click takes the keyboard only for a text field; buttons leave it where it was.
+        becomesKeyOnlyIfNeeded = true
         self.level = level
         isOpaque = false
         backgroundColor = .clear
