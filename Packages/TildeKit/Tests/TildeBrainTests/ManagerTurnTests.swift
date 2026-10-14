@@ -100,13 +100,19 @@ import WorkerKit
     /// Says something the fake always answers "Done." to, and waits for that: whatever the turns before
     /// it had to say has been said by then.
     private func barrier(_ conductor: Conductor) async throws {
+        // These tests check separate completed turns. If BARRIER joins a running turn, the fake only
+        // acknowledges the steer and that turn's existing reply answers it too.
+        try await waitFor {
+            guard conductor.thread.last?.from == .tilde, conductor.thread.last?.streaming == false else { return false }
+            return await !conductor.manager.isBusy
+        }
         conductor.tap("BARRIER")
         try await waitFor { conductor.thread.last?.text == "Done." && conductor.thread.last?.streaming == false }
     }
 
-    private func waitFor(_ condition: () -> Bool) async throws {
-        for _ in 0..<500 where !condition() { try await Task.sleep(for: .milliseconds(10)) }
-        try #require(condition())
+    private func waitFor(_ condition: () async -> Bool) async throws {
+        for _ in 0..<500 where !(await condition()) { try await Task.sleep(for: .milliseconds(10)) }
+        try #require(await condition())
     }
 }
 

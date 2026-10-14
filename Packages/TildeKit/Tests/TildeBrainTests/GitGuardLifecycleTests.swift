@@ -221,4 +221,27 @@ private actor GuardAuditWorker: Worker {
         #expect(f.conductor.job(f.job.id)?.lastTurn == .failed)
         #expect(await f.conductor.makeTools().call("finish", ["job": .string(f.job.id), "summary": "Done"]).isError)
     }
+
+    @Test func takingOverKeepsRefusingAnUnrepairedSetup() async throws {
+        let f = try Fixture()
+        try await f.start()
+        f.conductor.update(f.job.id) { $0.sessionID = "fixture-session" }
+        let outside = f.root.appending(path: "outside-config")
+        try f.original.write(to: outside, atomically: true, encoding: .utf8)
+        try f.linkConfig(to: outside)
+
+        #expect(await f.conductor.takeOver(f.job.id) == nil)
+        #expect(f.conductor.runs[f.job.id]?.gitGuard != nil)
+        // The worker went on the first attempt. Its absence doesn't mean the repair succeeded.
+        #expect(await f.conductor.takeOver(f.job.id) == nil)
+        #expect(f.conductor.runs[f.job.id]?.gitGuard != nil)
+        #expect(f.conductor.job(f.job.id)?.ticker == "Git setup needs review")
+
+        let restarted = try Conductor(home: f.conductor.home, config: f.options)
+        #expect(await restarted.takeOver(f.job.id) == nil)
+        #expect(restarted.job(f.job.id)?.ticker == "Git setup needs review")
+
+        try f.fixConfig()
+        #expect(await f.conductor.takeOver(f.job.id)?.command == "/usr/bin/false")
+    }
 }

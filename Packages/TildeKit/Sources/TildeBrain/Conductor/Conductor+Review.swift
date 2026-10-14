@@ -107,6 +107,15 @@ extension Conductor {
             update(jobID) { $0.phase = .stopped }
             return nil
         }
+        do {
+            // There may be no worker left, but a previous repair can still be refused, or the setup
+            // can have changed since it stopped. Check it before handing it to the owner's terminal.
+            try await secureGitSetup(job)
+        } catch {
+            update(jobID) { $0.phase = .stopped }
+            needsReview(jobID, error)
+            return nil
+        }
         update(jobID) { $0.phase = .stopped; $0.ticker = "Taken over" }
         log.append(jobID, "\(Owner.firstName) took over in a terminal")
         record(jobID, .you, .event, "Took over in a terminal")

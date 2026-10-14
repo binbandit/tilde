@@ -116,4 +116,62 @@ import WorkerKit
         #expect(await next.stopped)
         #expect(conductor.job(job.id)?.phase == .stopped)
     }
+
+    @Test func aStopAfterTheGitSnapshotDoesNotLaunchAWorker() async throws {
+        let conductor = try await fixture.makeConductor()
+        let job = try await fixture.delegate(conductor, to: FakeWorker())
+        await conductor.stop(job.id)
+        let next = FakeWorker()
+        let (harness, launches) = fixture.harness { _ in next }
+        conductor.update(job.id) { $0.harness = harness }
+
+        // Snapshotting ends before the final git-directory lookup. Stop while that asynchronous
+        // preparation is under way, before there is a worker to retire.
+        let stopping = Task {
+            let deadline = ContinuousClock.now + .seconds(5)
+            while conductor.runs[job.id]?.gitGuard == nil, ContinuousClock.now < deadline { await Task.yield() }
+            #expect(conductor.runs[job.id]?.gitGuard != nil)
+            #expect(conductor.runs[job.id]?.worker == nil)
+            await conductor.stop(job.id)
+        }
+        let delivery = Task { try await conductor.deliver("Carry on", to: job.id, from: .you) }
+        await stopping.value
+        await #expect(throws: DeliveryInterrupted.self) { try await delivery.value }
+        #expect(launches.all.isEmpty)
+        #expect(conductor.runs[job.id]?.worker == nil)
+        #expect(conductor.job(job.id)?.phase == .stopped)
+    }
+
+    @Test(arguments: [Job.Isolation.inPlace, .scratch])
+    func aReplacementWaitsForTheOldWorkerToStop(_ isolation: Job.Isolation) async throws {
+        let conductor = try await fixture.makeConductor()
+        let old = FakeWorker()
+        let (firstHarness, _) = fixture.harness { _ in old }
+        let workdir = isolation == .inPlace ? fixture.repo : conductor.home.scratch.appending(path: "fixture").path
+        try FileManager.default.createDirectory(atPath: workdir, withIntermediateDirectories: true)
+        var job = Job(id: "j-held-stop", title: "Fixture", brief: "Fixture", projectName: "app",
+                      repoPath: workdir, workdir: workdir, harness: firstHarness, isolation: isolation)
+        job.sessionID = "fixture-session"
+        conductor.addJob(job)
+        try await conductor.deliver("First", to: job.id, from: .you)
+        await old.holdStop()
+        let stopping = Task { await conductor.stop(job.id) }
+        try await fixture.waitFor { await old.stopped }
+
+        let next = FakeWorker()
+        let (nextHarness, launches) = fixture.harness { _ in next }
+        conductor.update(job.id) { $0.harness = nextHarness }
+        let delivery = Task { try await conductor.deliver("Second", to: job.id, from: .you) }
+        try await fixture.waitFor { conductor.job(job.id)?.phase == .working }
+        for _ in 0..<100 { await Task.yield() }
+        #expect(await !old.finishedStopping)
+        #expect(launches.all.isEmpty)
+
+        await old.releaseStop()
+        await stopping.value
+        try await delivery.value
+        #expect(await old.finishedStopping)
+        #expect(await next.received == ["Second"])
+        await conductor.stop(job.id)
+    }
 }

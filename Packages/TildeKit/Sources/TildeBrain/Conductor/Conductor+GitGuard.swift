@@ -34,8 +34,8 @@ extension Conductor {
     /// to. Throws when any of that can't be done safely; once the owner has sorted the repo out, it can.
     @discardableResult
     func secureGitSetup(_ job: Job) async throws -> GitGuard? {
-        guard job.isolation == .worktree else { return nil }
         _ = await runs[job.id]?.settling?.result
+        guard job.isolation == .worktree else { return nil }
         try await restoreGitSetup(job.id)
         let snapshot = await GitGuard.snapshot(repository: job.repoPath)
         guard snapshot.snapshotRefusals.isEmpty else { throw GitSetupNeedsReview(paths: snapshot.snapshotRefusals) }

@@ -98,8 +98,11 @@ actor FakeWorker: Worker {
     private(set) var received: [String] = []
     private(set) var answers: [String: WorkerAnswer] = [:]
     private(set) var stopped = false
+    private(set) var finishedStopping = false
     private var hold: Hold?
     private var held: [CheckedContinuation<Void, Never>] = []
+    private var holdingStop = false
+    private var heldStop: CheckedContinuation<Void, Never>?
 
     init() { (events, emit) = AsyncStream.makeStream() }
 
@@ -133,6 +136,16 @@ actor FakeWorker: Worker {
     func stop() async {
         stopped = true
         release()
+        if holdingStop { await withCheckedContinuation { heldStop = $0 } }
+        finishedStopping = true
+    }
+
+    func holdStop() { holdingStop = true }
+
+    func releaseStop() {
+        holdingStop = false
+        heldStop?.resume()
+        heldStop = nil
     }
 
     func end(ok: Bool = true) { emit.yield(.turnEnded(ok: ok, text: ok ? "Done" : "Failed")) }

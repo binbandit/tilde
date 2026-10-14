@@ -133,6 +133,7 @@ extension Conductor {
             do { try await restoreGitSetup(jobID) } catch { needsReview(jobID, error) }
             throw error
         }
+        guard runs[jobID]?.submission?.id == submission else { throw DeliveryInterrupted() }
         accept(submission, for: jobID)
     }
 
@@ -148,6 +149,8 @@ extension Conductor {
             }
         // A worktree's commits are written to the git directory its repo's worktrees share.
         let writable = job.isolation == .worktree ? [try await Git.commonDirectory(job.repoPath)] : []
+        // A stop during that lookup may have retired the submission before a worker existed to stop.
+        guard runs[job.id]?.submission?.id == submission else { throw DeliveryInterrupted() }
         let worker = spec.make(WorkerLaunch(
             workdir: job.workdir, sessionID: job.sessionID, resume: resume, model: job.model,
             instructions: Supervision.brief(owner: Owner.firstName, place: place), writable: writable))
