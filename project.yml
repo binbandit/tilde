@@ -31,8 +31,8 @@ targets:
     dependencies:
       - package: TildeKit
     postBuildScripts:
-      - name: Embed terminal lifecycle helper
-        script: 'bash "$SRCROOT/scripts/build-agent-hook.sh"'
+      - name: Embed retired terminal hook compatibility
+        script: 'bash "$SRCROOT/scripts/build-terminal-hook-compat.sh"'
         basedOnDependencyAnalysis: false
     entitlements:
       path: Tilde/Tilde.entitlements

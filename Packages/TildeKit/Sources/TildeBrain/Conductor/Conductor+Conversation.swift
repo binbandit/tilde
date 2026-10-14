@@ -30,9 +30,12 @@ extension Conductor {
             if text.contains(/(?i)\b(PRs?|pull requests?|reviews?|CI|checks)\b/), !watching.isEmpty {
                 body += "\n<pull_requests>\n\(Self.untrusted(watching))\n</pull_requests>"
             }
-            let terminalAgents = await initiative.terminalAgentContext(own: Set(jobs.compactMap(\.sessionID)))
-            if !terminalAgents.isEmpty {
-                body += "\n<terminal_agents>\n\(Self.untrusted(terminalAgents))\n</terminal_agents>"
+            // The owner's own agents come along when asked about, or when they're in the project being discussed.
+            let asked = text.contains(/(?i)\b(agents?|terminals?|herdr|sessions?)\b/)
+            let here = [context.repo, context.cwd].compactMap { $0 }
+            let agents = terminalAgents.filter { agent in asked || here.contains { Paths.isInside(agent.cwd, $0) } }
+            if !agents.isEmpty {
+                body += "\n<terminal_agents>\n\(Self.untrusted(AgentWatch.describe(agents)))\n</terminal_agents>"
             }
             await manager.post(.init(
                 "<tap \(attributes)>\n\(body)\n</tap>", tap: id,

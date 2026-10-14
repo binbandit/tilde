@@ -85,7 +85,7 @@ Only the actions that fit where the job is:
 
 - **Bring it in**: rebase onto your current branch and fast-forward your checkout (never into a dirty tree).
 - **Done**: signs the job off without bringing anything in.
-- **Take over**: stops the worker and resumes its session in your terminal.
+- **Take over**: stops the worker and resumes its session in your terminal: in herdr, beside your other agents, when it's installed ([terminal agents](TERMINAL_AGENTS.md)).
 
 ## Look
 

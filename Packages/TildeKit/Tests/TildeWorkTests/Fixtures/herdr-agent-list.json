@@ -1,0 +1,61 @@
+{
+    "id": "cli:agent:list",
+    "result": {
+        "agents": [
+            {
+                "agent": "claude",
+                "agent_session": {
+                    "agent": "claude",
+                    "kind": "id",
+                    "source": "herdr:claude",
+                    "value": "3f6c1b2a-8d4e-4f7a-9b1c-2e5d7a9c0b13"
+                },
+                "agent_status": "blocked",
+                "cwd": "/Users/owner/Developer/shop/proj",
+                "focused": true,
+                "foreground_cwd": "/Users/owner/Developer/shop/proj",
+                "launch_pending": true,
+                "name": "probe",
+                "pane_id": "w2:p1",
+                "revision": 2,
+                "state_change_seq": 1,
+                "tab_id": "w2:t1",
+                "terminal_id": "term_65dc1a966c5152",
+                "terminal_title": "claude ~/D/shop/proj",
+                "terminal_title_stripped": "claude ~/D/shop/proj",
+                "workspace_id": "w2"
+            },
+            {
+                "agent": "codex",
+                "agent_status": "working",
+                "cwd": "/Users/owner/Developer/shop/proj",
+                "focused": false,
+                "foreground_cwd": "/Users/owner/Developer/shop/proj",
+                "pane_id": "w2:p2",
+                "revision": 1,
+                "state_change_seq": 2,
+                "tab_id": "w2:t1",
+                "terminal_id": "term_65dc1aa640de33",
+                "terminal_title": "~/D/shop/proj",
+                "terminal_title_stripped": "~/D/shop/proj",
+                "workspace_id": "w2"
+            },
+            {
+                "agent": "gemini",
+                "agent_status": "idle",
+                "cwd": "/Users/owner/Developer/shop",
+                "focused": false,
+                "foreground_cwd": "/Users/owner/Developer/shop",
+                "pane_id": "w3:p1",
+                "revision": 1,
+                "state_change_seq": 3,
+                "tab_id": "w3:t1",
+                "terminal_id": "term_65dc1aa645ee24",
+                "terminal_title": "~/D/shop",
+                "terminal_title_stripped": "~/D/shop",
+                "workspace_id": "w3"
+            }
+        ],
+        "type": "agent_list"
+    }
+}

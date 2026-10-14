@@ -63,8 +63,15 @@ enum Fixtures {
                 at: yesterday(21, 40)),
             Message(from: .you, text: "great, night", at: yesterday(21, 41)),
         ]
+        let terminalAgents = [
+            TerminalAgent(harness: .claude, cwd: "\(home)/Developer/frontend/paradise", state: .blocked, place: .herdr(pane: "w1:p2")),
+            TerminalAgent(harness: .codex, cwd: "\(home)/Developer/frontend/oh-fx", state: .done, place: .herdr(pane: "w2:p1")),
+            TerminalAgent(harness: .claude, cwd: "\(home)/Developer/tilde", state: .unknown,
+                          place: .terminal(pid: 4242, app: "/Applications/Ghostty.app")),
+        ]
         return AppModel.Fixture(
-            thread: thread, earlier: earlier, jobs: jobs, attention: [ask, offer], transcripts: transcripts(ago), diff: sampleDiff)
+            thread: thread, earlier: earlier, jobs: jobs, attention: [ask, offer], transcripts: transcripts(ago), diff: sampleDiff,
+            terminalAgents: terminalAgents)
     }
 
     /// What each agent was told, said, did and asked.
