@@ -90,10 +90,19 @@ final class Inlet {
     /// Modes that show the whole conversation.
     var isConversation: Bool { [.open, .compose, .listening].contains(mode) }
 
-    /// Modes that need the keyboard.
+    /// Modes that take the keyboard as they open.
     var wantsKey: Bool {
         switch mode {
         case .compose, .job: true
+        default: false
+        }
+    }
+
+    /// Modes with somewhere to type. Clicking into it takes the keyboard, even when the mode
+    /// opened without it (hovering never takes your typing away from another app).
+    var canType: Bool {
+        switch mode {
+        case .open, .compose, .job: true
         default: false
         }
     }
