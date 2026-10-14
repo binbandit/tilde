@@ -108,7 +108,7 @@ extension Job {
         case .ready:
             let status = reviewAction == .acknowledge ? "complete, awaiting acknowledgement" : "ready for review"
             line += ", \(status) since \(updatedAt.formatted(.relative(presentation: .named)))"
-        case .landed, .failed, .stopped: line += " \(updatedAt.formatted(.relative(presentation: .named)))"
+        case .landed, .done, .failed, .stopped: line += " \(updatedAt.formatted(.relative(presentation: .named)))"
         default: line += ", \(ticker)"
         }
         if let summary, !summary.isEmpty { line += ". \(summary.clipped(to: 200))" }

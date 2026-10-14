@@ -11,7 +11,12 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
         case needsYou
         /// The manager has signed the work off; it's waiting for review.
         case ready
-        case landed, failed, stopped
+        /// Brought into the checkout.
+        case landed
+        /// Acknowledged without landing: no changes, scratch work, or work done in place. A worktree
+        /// stays until it's discarded.
+        case done
+        case failed, stopped
 
         public var isActive: Bool { [.starting, .working, .deciding, .needsYou].contains(self) }
         public var isOpen: Bool { isActive || self == .ready }
@@ -47,12 +52,17 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
     /// The manager's sign-off, or the worker's last word.
     public var summary: String?
     public var diff: DiffStat?
-    /// An acknowledged result may retain its worktree; actual landing never sets this.
-    public var acknowledgedAt: Date?
+    /// How the worker's latest turn ended, kept so it can still be signed off after a restart;
+    /// nil while a message is on its way to it or being worked on.
+    public var lastTurn: TurnOutcome?
     /// The pull request for this job's branch, once there is one.
     public var pullRequest: PullRequest?
     public var createdAt: Date
     public var updatedAt: Date
+
+    public enum TurnOutcome: String, Codable, Sendable {
+        case succeeded, failed
+    }
 
     /// The primary review action is based on observed changes, never a model's summary.
     public enum ReviewAction: Sendable {
@@ -66,9 +76,14 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
         return diff.isEmpty ? .acknowledge : .bringIn
     }
 
-    /// Acknowledging a no-change worktree retains it, so explicit cleanup remains available.
+    /// Its worktree or scratch folder can go. Landed work is in the checkout already, as is work done in
+    /// place; work marked done has only a worktree left, kept to look at until it's discarded.
     public var canDiscard: Bool {
-        !phase.isActive && isolation != .inPlace && (phase != .landed || (isolation == .worktree && acknowledgedAt != nil))
+        switch phase {
+        case .landed: false
+        case .done: isolation == .worktree
+        default: !phase.isActive && isolation != .inPlace
+        }
     }
 
     public init(

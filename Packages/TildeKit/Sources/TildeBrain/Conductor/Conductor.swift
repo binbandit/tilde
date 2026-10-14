@@ -48,7 +48,8 @@ public final class Conductor {
     /// The app sets this while the Inlet is open, so held news can be told.
     @ObservationIgnored public var looking = false
     @ObservationIgnored public weak var perception: (any Perception)?
-    @ObservationIgnored var workers: [String: any Worker] = [:]
+    /// Each job's worker and the turn it's on, by job id (see `WorkerRun`).
+    @ObservationIgnored var runs: [String: WorkerRun] = [:]
     /// Open worker requests: request id -> (job id, what was asked).
     @ObservationIgnored var requests: [String: (job: String, request: WorkerRequest)] = [:]
     @ObservationIgnored let log: TaskLog
@@ -67,28 +68,6 @@ public final class Conductor {
     @ObservationIgnored var optionalReplies: Set<String> = []
     /// Turns carrying your answers, whose exchange the scribe has already seen.
     @ObservationIgnored var answerTaps: Set<String> = []
-    /// Each worktree job's repo git config and hooks as they were when its worker started.
-    @ObservationIgnored var gitGuards: [String: GitGuard] = [:]
-    @ObservationIgnored var gitCleanups: [String: GitCleanup] = [:]
-    @ObservationIgnored var gitGuardFailures: [String: [String]] = [:]
-    @ObservationIgnored var gitReviews: [String: [CheckedContinuation<Void, Never>]] = [:]
-    /// When each job's agent last ended a turn, and was last handed words: one handed words since is busy
-    /// with them, whatever its job says.
-    @ObservationIgnored var turnEnded: [String: Date] = [:]
-    @ObservationIgnored var handed: [String: Date] = [:]
-    /// Owner opt-in for this worker session only; never restored or model-writable.
-    var automaticApprovalJobs: Set<String> = []
-    /// Successful, current worker turns eligible for the manager to sign off.
-    @ObservationIgnored var successfulTurns: Set<String> = []
-    /// Submission markers share the worker event stream, so buffered old completions cannot
-    /// be mistaken for a newer message, even when a send RPC returns after its completion.
-    @ObservationIgnored var deliveriesInFlight: [String: Int] = [:]
-    @ObservationIgnored var expectedSubmissions: [String: UUID] = [:]
-    @ObservationIgnored var observedSubmissions: [String: UUID] = [:]
-    @ObservationIgnored var acceptedSubmissions: [String: UUID] = [:]
-    @ObservationIgnored var pendingCompletions: [String: (submission: UUID, event: WorkerEvent)] = [:]
-    /// Invalidates launch preparation as well as already registered workers when Stop wins.
-    @ObservationIgnored var workerGenerations: [String: UUID] = [:]
     /// What the watchers last saw of your PRs, kept here so a message can take it along without waiting.
     @ObservationIgnored var watching = ""
 
@@ -117,10 +96,8 @@ public final class Conductor {
         transcriptStore = TranscriptStore(folder: home.state.appending(path: "jobs"))
         initiativeEnabled = config.initiative
         (signals, signal) = AsyncStream<Signal>.makeStream(bufferingPolicy: .unbounded)
-        manager = Manager(memory: memory, tools: makeTools(), config: config.manager, repositoryPaths: { [weak self] ids in
-            await MainActor.run {
-                ids.compactMap { self?.job($0) }.filter { $0.isolation != .scratch }.map(\.repoPath)
-            }
+        manager = Manager(memory: memory, tools: makeTools(), config: config.manager, repositories: { [weak self] ids in
+            await MainActor.run { ids.compactMap { self?.job($0) }.filter { $0.isolation != .scratch }.map(\.repoPath) }
         })
         scribe = Scribe(memory: memory, model: config.scribe)
         dreamer = Dreamer(memory: memory, home: home, model: config.dream) { [home, projects, notebook = memory.notebook] day in
@@ -209,10 +186,10 @@ public final class Conductor {
         text.replacingOccurrences(of: "<", with: "‹").replacingOccurrences(of: ">", with: "›")
     }
 
-    /// Makes text safe inside a double-quoted attribute of the manager's tags.
     /// How much of the previous conversation stays in view above today's.
     static let earlierShown = 6
 
+    /// Makes text safe inside a double-quoted attribute of the manager's tags.
     nonisolated static func escape(_ text: String) -> String {
         text.replacingOccurrences(of: "\"", with: "'").replacingOccurrences(of: "\n", with: " ")
     }

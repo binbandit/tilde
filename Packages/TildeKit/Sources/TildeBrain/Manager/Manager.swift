@@ -53,7 +53,7 @@ public actor Manager: CodexHost {
         /// Paths and jobs the message concerns, to pull the right notes into the briefing.
         public var paths: [String]
         public var jobs: [String]
-        /// Whether Codex accepted this message. Queuing alone is not delivery.
+        /// Told whether Codex took the message (being queued isn't delivery), once that's known.
         var onDelivery: (@Sendable (Bool) async -> Void)?
 
         public init(_ text: String, tap: String? = nil, paths: [String] = [], jobs: [String] = []) {
@@ -69,10 +69,10 @@ public actor Manager: CodexHost {
     private let memory: Memory
     private let tools: Toolset
     private let config: Config
-    /// Job identities are resolved by the conductor, never by parsing message text or notebook notes.
-    private let repositoryPaths: @Sendable ([String]) async -> [String]
-    private var repositoryInstructions: [String: RepositoryInstructions.Snapshot] = [:]
-    private var pendingRepositoryInstructions: [String: (snapshot: RepositoryInstructions.Snapshot, revision: String)] = [:]
+    /// The repos of the jobs a message concerns.
+    private let repositories: @Sendable (_ jobs: [String]) async -> [String]
+    /// Each repo's root AGENTS.md as this thread last had it: it's sent again only when it changes.
+    private var instructions: [String: String] = [:]
 
     /// The day's thread, once it's ready for turns.
     private var session: CodexSession?
@@ -84,16 +84,20 @@ public actor Manager: CodexHost {
     private var turn: [String]?
     /// Changes before a turn starts any async work, unlike the watchdog generation.
     private var turnID = UUID()
-    /// A completion can precede its steer receipts. Keep its reply until those receipts settle,
-    /// so accepted messages join that reply without executing their instructions again.
+    /// A turn can end before Codex confirms what was steered into it. Its reply waits for those receipts,
+    /// so what Codex took joins that reply instead of being asked again in a turn of its own.
     private struct SteeredTurn {
+        enum Receipt { case pending, accepted, rejected }
+
         let initialTaps: [String]
         let initialSaid: String
-        var messages: [(tap: String, text: String, accepted: Bool?)] = []
+        var messages: [(tap: String, text: String, receipt: Receipt)] = []
         var reply: String?
 
-        var taps: [String] { initialTaps + messages.filter { $0.accepted == true }.map(\.tap) }
-        var said: String { ([initialSaid] + messages.filter { $0.accepted == true }.map(\.text)).filter { !$0.isEmpty }.joined(separator: "\n") }
+        private var accepted: [(tap: String, text: String, receipt: Receipt)] { messages.filter { $0.receipt == .accepted } }
+        var taps: [String] { initialTaps + accepted.map(\.tap) }
+        var said: String { ([initialSaid] + accepted.map(\.text)).filter { !$0.isEmpty }.joined(separator: "\n") }
+        var settled: Bool { !messages.contains { $0.receipt == .pending } }
     }
     private var steeredTurns: [UUID: SteeredTurn] = [:]
     private var streaming = ""
@@ -115,12 +119,12 @@ public actor Manager: CodexHost {
 
     public init(
         memory: Memory, tools: Toolset, config: Config = Config(),
-        repositoryPaths: @escaping @Sendable ([String]) async -> [String] = { _ in [] }
+        repositories: @escaping @Sendable (_ jobs: [String]) async -> [String] = { _ in [] }
     ) {
         self.memory = memory
         self.tools = tools
         self.config = config
-        self.repositoryPaths = repositoryPaths
+        self.repositories = repositories
         (outputs, emit) = AsyncStream<Output>.makeStream(bufferingPolicy: .unbounded)
     }
 
@@ -139,37 +143,37 @@ public actor Manager: CodexHost {
         let mine = turnID
         let briefing = await withBriefing(message.text, paths: message.paths, jobs: message.jobs)
         guard turnID == mine, turn != nil, session === self.session else { return requeue(message) }
-        if steeredTurns[mine] == nil { steeredTurns[mine] = SteeredTurn(initialTaps: turn ?? [], initialSaid: said) }
-        let index = steeredTurns[mine]!.messages.count
-        steeredTurns[mine]!.messages.append((tap, message.text, nil))
+        var steered = steeredTurns[mine] ?? SteeredTurn(initialTaps: turn ?? [], initialSaid: said)
+        let index = steered.messages.count
+        steered.messages.append((tap, message.text, .pending))
+        steeredTurns[mine] = steered
         do {
             try await session.steer(briefing.text)
         } catch {
-            settleSteer(turn: mine, index: index, accepted: false)
+            settleSteer(turn: mine, index: index, .rejected)
             return requeue(message)
         }
-        if turnID == mine { received(briefing.repositories) }
+        if session === self.session { instructions.merge(briefing.instructions) { $1 } }
         Log.info("manager", "steered in: \(message.text.clipped(to: 200))")
         if turnID == mine, turn != nil {
             asked += "\n\n" + briefing.text
             streaming = ""
         }
-        settleSteer(turn: mine, index: index, accepted: true)
-        // Record the tap in its own turn before a durable delivery receipt can suspend us.
-        await message.onDelivery?(true)
+        settleSteer(turn: mine, index: index, .accepted)
+        receipts([message], accepted: true)
     }
 
-    private func settleSteer(turn mine: UUID, index: Int, accepted: Bool) {
+    private func settleSteer(turn mine: UUID, index: Int, _ receipt: SteeredTurn.Receipt) {
         guard var steered = steeredTurns[mine] else { return }
-        steered.messages[index].accepted = accepted
-        if accepted {
+        steered.messages[index].receipt = receipt
+        if receipt == .accepted {
             if turnID == mine, turn != nil {
                 turn = steered.taps
                 said = steered.said
             }
             emit.yield(.read(taps: steered.taps))
         }
-        if steered.messages.allSatisfy({ $0.accepted != nil }) {
+        if steered.settled {
             if let reply = steered.reply, !steered.taps.isEmpty {
                 emit.yield(.replyDone(taps: steered.taps, text: reply, said: steered.said))
             }
@@ -220,8 +224,6 @@ public actor Manager: CodexHost {
             turnStarted = .now
             attempts = 0
             done = []
-            repositoryInstructions = [:]
-            pendingRepositoryInstructions = [:]
             Log.info("manager", "turn: \(text.clipped(to: 300))")
             let session = try await ensureSession()
             guard turnID == mine, turn != nil else { throw CancellationError() }
@@ -229,17 +231,22 @@ public actor Manager: CodexHost {
             guard turnID == mine, turn != nil else { throw CancellationError() }
             asked = briefing.text
             try await session.send(asked, effort: config.effort)
-            if turnID == mine { received(briefing.repositories) }
-            for message in batch { await message.onDelivery?(true) }
+            if session === self.session { instructions.merge(briefing.instructions) { $1 } }
             emit.yield(.read(taps: batch.compactMap(\.tap)))
+            receipts(batch, accepted: true)
             guard turnID == mine, turn != nil else { return }
             watch()
             await steerWaiting()
         } catch {
-            for message in batch { await message.onDelivery?(false) }
             emit.yield(.undelivered(taps: batch.compactMap(\.tap), reason: "I couldn't reach Codex: \(error)"))
+            receipts(batch, accepted: false)
             if turnID == mine { endTurn() }
         }
+    }
+
+    /// Tells whoever's waiting whether their messages reached the model, without holding up the turn.
+    private func receipts(_ messages: [Message], accepted: Bool) {
+        for case let onDelivery? in messages.map(\.onDelivery) { Task { await onDelivery(accepted) } }
     }
 
     /// What Brayden said while this turn was starting (or being asked again) joins it now, rather than
@@ -251,54 +258,19 @@ public actor Manager: CodexHost {
         for message in waiting { await steer(message) }
     }
 
+    /// A message as it's sent: with the notes it calls for, and the root AGENTS.md of each repo it's about
+    /// that this thread doesn't have as it now reads. Returns those, to count as had once it's delivered.
     private func withBriefing(
         _ text: String, paths: [String], jobs: [String]
-    ) async -> (text: String, repositories: [RepositoryInstructions.Snapshot]) {
-        let jobPaths = await repositoryPaths(jobs)
-        let snapshots = await RepositoryInstructions.snapshots(for: paths, repositories: jobPaths)
+    ) async -> (text: String, instructions: [String: String]) {
+        let repositories = Set((await repositories(jobs) + paths).compactMap(RepositoryInstructions.repository(containing:)))
+        var fresh: [String: String] = [:]
+        for repository in repositories {
+            if let text = RepositoryInstructions.read(repository: repository), instructions[repository] != text { fresh[repository] = text }
+        }
         let notes = await memory.briefing(for: text, paths: paths, jobs: jobs)
-        return ((snapshots.map { $0.context() } + [notes, text].compactMap { $0 }).joined(separator: "\n\n"), snapshots)
-    }
-
-    private func received(_ snapshots: [RepositoryInstructions.Snapshot]) {
-        for snapshot in snapshots {
-            repositoryInstructions[snapshot.root] = snapshot
-            pendingRepositoryInstructions[snapshot.root] = nil
-        }
-    }
-
-    /// A project discovered during the turn must be read before work is delegated or finalized.
-    /// Its current instructions make the model reconsider the action, then explicitly retry.
-    /// Re-read every time so edited instructions cannot be bypassed by a stale thread cache.
-    func prepareRepositoryWork(repository: String, tool: String = "delegate", revision: String? = nil) -> String? {
-        prepareRepositoryWork(RepositoryInstructions.load(root: repository), tool: tool, revision: revision)
-    }
-
-    private func prepareRepositoryWork(_ snapshot: RepositoryInstructions.Snapshot, tool: String, revision: String?) -> String? {
-        if case .unavailable = snapshot.state { return snapshot.context() }
-        let previous = repositoryInstructions[snapshot.root]
-        if case .absent = snapshot.state, previous == nil, pendingRepositoryInstructions[snapshot.root] == nil {
-            repositoryInstructions[snapshot.root] = snapshot
-            return nil
-        }
-        guard previous != snapshot else { return nil }
-        let token: String
-        if let pending = pendingRepositoryInstructions[snapshot.root], pending.snapshot == snapshot {
-            token = pending.revision
-        } else {
-            token = UUID().uuidString.lowercased()
-            pendingRepositoryInstructions[snapshot.root] = (snapshot, token)
-        }
-        if revision == token {
-            received([snapshot])
-            return nil
-        }
-        // Returning context does not acknowledge it. Parallel calls made before the model sees
-        // this response must also stop, and old tokens must not acknowledge changed file contents.
-        return "Read these repository instructions and reconcile the action before retrying \(tool). The requested action has not run. "
-            + "After reading, echo this exact argument on the retry:\n"
-            + JSON.object(["repository_revision": .string(token)]).compact + "\n\n"
-            + snapshot.context()
+        let blocks = fresh.sorted { $0.key < $1.key }.map { RepositoryInstructions.tagged(repository: $0.key, text: $0.value) }
+        return ((blocks + [notes, text].compactMap { $0 }).joined(separator: "\n\n"), fresh)
     }
 
     // MARK: Stalls
@@ -384,7 +356,7 @@ public actor Manager: CodexHost {
         guard let taps = turn else { return }
         Log.info("manager", "turn done in \(String(format: "%.1f", Date.now.timeIntervalSince(turnStarted)))s: \(replyText.clipped(to: 200))")
         if steeredTurns[turnID] != nil {
-            steeredTurns[turnID]!.reply = replyText
+            steeredTurns[turnID]?.reply = replyText
         } else if !taps.isEmpty {
             emit.yield(.replyDone(taps: taps, text: replyText, said: said))
         }
@@ -439,6 +411,7 @@ public actor Manager: CodexHost {
             throw error
         }
         await memory.resetBriefing()
+        instructions = [:]
         return session
     }
 
@@ -517,11 +490,6 @@ public actor Manager: CodexHost {
     // MARK: CodexHost
 
     public func callTool(_ name: String, arguments: JSON) async -> ToolResult {
-        if ["steer", "finish"].contains(name), let job = arguments["job"]?.string {
-            let snapshots = await RepositoryInstructions.snapshots(for: [], repositories: repositoryPaths([job]))
-            let unread = snapshots.compactMap { prepareRepositoryWork($0, tool: name, revision: arguments["repository_revision"]?.string) }
-            if !unread.isEmpty { return .error(unread.joined(separator: "\n\n")) }
-        }
-        return await tools.call(name, arguments)
+        await tools.call(name, arguments)
     }
 }

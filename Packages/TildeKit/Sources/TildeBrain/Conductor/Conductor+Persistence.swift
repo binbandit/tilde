@@ -26,20 +26,19 @@ extension Conductor {
         attention = snapshot.attention.filter { $0.requestID == nil }
     }
 
-    /// Active workers pick their sessions back up.
+    /// Workers that were mid-turn pick their sessions back up.
     func resumeActive() {
         for job in jobs where job.phase.isActive {
             // Waiting on a question tilde asked rather than one from its worker: the worker isn't mid-turn, so it stays put.
             if job.phase == .needsYou, attention.contains(where: { $0.jobID == job.id && $0.requestID == nil }) { continue }
-            update(job.id) { $0.phase = .working; $0.ticker = "Resuming after a restart" }
-            Task {
-                do {
-                    try await spawn(job, brief: "tilde restarted while you were working. Continue where you left off.", resume: true)
-                } catch {
-                    guard !(error is DeliveryInterrupted) else { return }
-                    update(job.id) { $0.phase = .failed; $0.ticker = "Couldn't resume: \(error)" }
-                }
+            // Its turn was over: the manager (a new thread now) hears how it went again, and decides.
+            if job.lastTurn != nil {
+                Task { await manager.post(Self.finished(job, text: job.summary ?? "")) }
+                continue
             }
+            // One that can't be resumed says so on the job.
+            handOver("tilde restarted while you were working. Continue where you left off.", to: job.id,
+                     resume: true, ticker: "Resuming after a restart")
         }
     }
 

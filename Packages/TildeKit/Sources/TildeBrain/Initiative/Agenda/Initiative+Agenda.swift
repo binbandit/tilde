@@ -70,11 +70,14 @@ extension Initiative {
         let agenda = agenda(calendar: calendar)
         var found: [Due] = []
         var routines: Set<String> = []
+        var followUps: Set<String> = []
         for item in agenda.items {
             switch item.when {
             case .once(let date):
                 let line = item.line(calendar: calendar)
-                guard date <= now, pendingFollowUps.insert(line).inserted else { continue }
+                followUps.insert(line)
+                guard date <= now, heldFollowUps[line] ?? .distantPast <= now else { continue }
+                heldFollowUps[line] = .distantFuture
                 found.append(Due(kind: .followUp, text: item.text, at: date, job: item.job, agendaLine: line))
             case .every:
                 let key = item.line(calendar: calendar)
@@ -91,6 +94,7 @@ extension Initiative {
             }
         }
         seen.fired = seen.fired.filter { routines.contains($0.key) }
+        heldFollowUps = heldFollowUps.filter { followUps.contains($0.key) }
 
         for goal in Goal.all(in: notebook) where goal.isDue(at: now) {
             guard let checkIn = goal.checkIn else { continue }
@@ -104,19 +108,25 @@ extension Initiative {
         return found.sorted { $0.at < $1.at }
     }
 
-    /// Accepted follow-ups leave the notebook. Failed sends become due again at the next look;
-    /// a restart also retries, because pending claims only live in memory.
+    /// Follow-ups the manager took leave the notebook. Ones Codex couldn't take come due again after a wait
+    /// that doubles with each failure in a row, up to half an hour, so an outage isn't retried (and
+    /// reported) every minute. A restart retries straight away: what's held only lives in memory.
     func delivered(_ items: [Due], accepted: Bool) async {
-        let lines = Set(items.compactMap(\.agendaLine)).intersection(pendingFollowUps)
+        let lines = items.compactMap(\.agendaLine).filter { heldFollowUps[$0] != nil }
         guard !lines.isEmpty else { return }
-        if accepted {
-            var agenda = agenda()
-            for line in lines {
-                if let item = Agenda.Item(line: line) { agenda.remove(item) }
-            }
-            await save(agenda, reason: "follow-ups handed to tilde")
+        guard accepted else {
+            failedHandOvers += 1
+            let wait = min(60 * pow(2, Double(failedHandOvers - 1)), 30 * 60)
+            for line in lines { heldFollowUps[line] = .now.addingTimeInterval(wait) }
+            return
         }
-        pendingFollowUps.subtract(lines)
+        failedHandOvers = 0
+        var agenda = agenda()
+        for line in lines {
+            if let item = Agenda.Item(line: line) { agenda.remove(item) }
+            heldFollowUps[line] = nil
+        }
+        await save(agenda, reason: "follow-ups handed to tilde")
     }
 
     /// What's coming after `start` up to `end`: follow-ups, routine runs and goal check-ins, soonest first.

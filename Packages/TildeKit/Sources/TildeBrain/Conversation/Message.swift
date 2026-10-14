@@ -15,8 +15,9 @@ public struct Message: Identifiable, Codable, Sendable, Hashable {
         case sent
         /// tilde has it.
         case read(Date)
-        /// It never reached tilde's model, and why.
-        case failed(String)
+        /// No reply is coming, and why: it never reached tilde's model, or tilde had it (`read`) but
+        /// stopped before answering.
+        case failed(String, read: Date? = nil)
     }
 
     public let id: String
