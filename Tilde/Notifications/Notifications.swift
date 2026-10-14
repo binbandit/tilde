@@ -28,12 +28,11 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         switch signal {
         case .asked(let item): if Self.isAway { post(item) } else { remindLater(item) }
         case .resolved(let id):
-            center.removePendingNotificationRequests(withIdentifiers: [id])
-            center.removeDeliveredNotifications(withIdentifiers: [id])
+            removeQuestionNotifications(id)
             registerQuestions()
         case .said(let text, let jobID): if Self.isAway { say(text, jobID: jobID) }
         // A reply you walked away from waits for you like a text would (not one showing on the Inlet now).
-        case .replied(let text): if Self.isAway, inlet.inlet.mode == .rest { say(text, jobID: nil) }
+        case .replied(let text): if Self.isAway, inlet.inlet.mode == .rest || inlet.isMinimized { say(text, jobID: nil) }
         case .noted, .jobChanged, .trouble: break
         }
     }
@@ -57,6 +56,7 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func post(_ item: Attention) {
+        guard model.attention.contains(where: { $0.id == item.id }) else { return }
         // Its actions have to be registered before the notification that uses them.
         registerQuestions()
         let content = UNMutableNotificationContent()
@@ -70,7 +70,18 @@ final class Notifications: NSObject, UNUserNotificationCenterDelegate {
         content.sound = .default
         content.userInfo = ["attention": item.id]
         content.categoryIdentifier = Self.categoryID(item.id)
-        center.add(UNNotificationRequest(identifier: item.id, content: content, trigger: nil))
+        center.add(UNNotificationRequest(identifier: item.id, content: content, trigger: nil)) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, !self.model.attention.contains(where: { $0.id == item.id }) else { return }
+                // Resolution can arrive while the system is still accepting this notification.
+                self.removeQuestionNotifications(item.id)
+            }
+        }
+    }
+
+    private func removeQuestionNotifications(_ id: String) {
+        center.removePendingNotificationRequests(withIdentifiers: [id])
+        center.removeDeliveredNotifications(withIdentifiers: [id])
     }
 
     /// Every open question keeps its inline answers. tilde registers no other categories.

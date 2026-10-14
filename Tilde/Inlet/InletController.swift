@@ -347,6 +347,9 @@ final class InletController {
         }
     }
 
+    /// Explicit minimization remains in effect while completed replies and questions peek out.
+    var isMinimized: Bool { minimization.isMinimized }
+
     private var messageStates: [InletMinimization.MessageState] {
         model.thread.map { message in
             let failed: Bool
