@@ -150,15 +150,15 @@ final class AppModel {
         try await conductor?.land(jobID)
     }
 
-    func discard(_ jobID: String) async {
+    func discard(_ jobID: String) async throws {
         guard fixture == nil else { return }
-        await conductor?.discard(jobID)
+        try await conductor?.discard(jobID)
     }
 
-    /// Scratch work has nothing to land; this marks it done.
-    func dismiss(_ jobID: String) async {
+    /// Work with nothing to bring in (no changes, scratch, or done in place): this marks it done.
+    func dismiss(_ jobID: String) async throws {
         guard fixture == nil else { return }
-        await conductor?.dismiss(jobID)
+        try await conductor?.dismiss(jobID)
     }
 
     /// Stops the worker and resumes its session in your terminal.

@@ -58,10 +58,10 @@ struct Receipt: View {
             Text("Delivered").receipt()
         case .read(let at):
             Text("Read \(at.formatted(date: .omitted, time: .shortened))").receipt()
-        case .failed(let reason):
+        case .failed(let reason, let read):
             HStack(spacing: 5) {
                 Image(systemName: "exclamationmark.circle.fill").font(.system(size: 10))
-                Text("Not delivered").font(.system(size: 11, weight: .medium))
+                Text(read == nil ? "Not delivered" : "No reply").font(.system(size: 11, weight: .medium))
                 Text("·").font(.system(size: 11))
                 Button("Try again") { model.retry(message) }
                     .buttonStyle(.plain)

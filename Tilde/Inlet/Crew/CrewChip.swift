@@ -48,6 +48,7 @@ struct JobStatus: View {
         case .ready: "ready"
         case .failed: "failed"
         case .landed: "landed"
+        case .done: "done"
         case .stopped: "stopped"
         case .deciding: "deciding"
         case .starting, .working: job.elapsed
@@ -57,7 +58,7 @@ struct JobStatus: View {
     private var color: Color {
         switch job.phase {
         case .needsYou: Theme.amber
-        case .ready, .landed: Theme.ready
+        case .ready, .landed, .done: Theme.ready
         case .failed: Theme.failed
         default: Theme.text3
         }

@@ -19,7 +19,6 @@ struct JobFooter: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            JobApprovalPolicy(job: job)
             if let question = model.question(for: job.id) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(question.question).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.text)
@@ -27,7 +26,7 @@ struct JobFooter: View {
                     QuestionOptions(item: question)
                 }
             }
-            if job.phase != .landed {
+            if !job.phase.isSettled {
                 AgentComposer(job: job, answering: model.question(for: job.id), problem: $problem) {
                     act(closing: false) { await model.stop(job) }
                 }
@@ -49,7 +48,7 @@ struct JobFooter: View {
     }
 
     /// Anything for the row under the composer: the work's own actions, or how one went.
-    private var hasActions: Bool { hasWorkdir || job.phase == .ready || job.phase == .landed || busy || problem != nil }
+    private var hasActions: Bool { hasWorkdir || job.phase == .ready || job.phase.isSettled || busy || problem != nil }
 
     @ViewBuilder private var secondary: some View {
         if hasWorkdir, job.canDiscard {
@@ -63,12 +62,12 @@ struct JobFooter: View {
                     }
                     return
                 }
-                act { await model.discard(job.id) }
+                act { try await model.discard(job.id) }
             }
             .buttonStyle(.outline(large: true, destructive: true))
             .animation(Theme.quick, value: discarding)
         }
-        if job.takeOverCommand != nil, hasWorkdir, job.phase != .landed {
+        if job.takeOverCommand != nil, hasWorkdir, !job.phase.isSettled {
             Button("Take over") { act { await model.takeOver(job) } }.buttonStyle(.outline(large: true))
         }
         if hasWorkdir { OpenInEditor(job: job) }
@@ -78,7 +77,7 @@ struct JobFooter: View {
         switch job.phase {
         case .ready where job.reviewAction == .acknowledge:
             // A verified no-change result needs acknowledgement, as do scratch and in-place jobs.
-            Button("Done") { act { await model.dismiss(job.id) } }
+            Button("Done") { act { try await model.dismiss(job.id) } }
                 .buttonStyle(.pill(Theme.ready, large: true))
                 .keyboardShortcut(.return, modifiers: .command)
         case .ready:
@@ -92,10 +91,8 @@ struct JobFooter: View {
                 }
                 .buttonStyle(.pill(Theme.ready, large: true))
                 .keyboardShortcut(.return, modifiers: .command)
-            } else {
-                Meta(text: "Changes have not been verified", color: Theme.amber)
             }
-        case .landed:
+        case .landed, .done:
             if let pr = job.pullRequest { PullRequestLink(pr: pr) }
             Meta(text: job.ticker, color: Theme.ready)
         default:

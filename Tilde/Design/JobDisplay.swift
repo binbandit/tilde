@@ -8,11 +8,14 @@ extension Job.Phase {
         case .starting, .working: .working
         case .deciding: .thinking
         case .needsYou: .needsYou
-        case .ready, .landed: .done
+        case .ready, .landed, .done: .done
         case .failed: .failed
         case .stopped: .idle
         }
     }
+
+    /// The owner has closed it out: brought in, or acknowledged with nothing to bring in.
+    var isSettled: Bool { self == .landed || self == .done }
 }
 
 extension Job {
