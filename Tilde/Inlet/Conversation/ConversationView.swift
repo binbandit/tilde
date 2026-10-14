@@ -44,7 +44,7 @@ struct ConversationView: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { headerHeight = $0; measureChrome() }
             thread
             VStack(alignment: .leading, spacing: 14) {
-                if !model.crew.isEmpty { CrewStrip(actions: actions) }
+                if !model.crew.isEmpty || !model.terminalAgents.isEmpty { CrewStrip(actions: actions) }
                 if inlet.mode != .listening {
                     Composer(referent: referent, focused: inlet.mode == .compose, actions: actions)
                 }
