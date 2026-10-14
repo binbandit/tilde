@@ -24,7 +24,7 @@ For agents whose best machine interface is a headless mode with a JSON event str
 
 **Ordered submissions.** Amp has no correlated prompt acknowledgment, so tilde serializes its prompts. While a follow-up is queued, the preceding completion dispatches the queue instead of reporting success for the new instruction. A later successful `result` is a run summary, which may arrive after that dispatch or only when stdin closes; it cannot complete the next turn. Pi echoes the prompt's request ID in its preflight response, allowing mid-turn steering without treating an already buffered `agent_settled` as the new instruction's completion. Exiting while an acknowledgment is pending ends the worker even if the preceding turn has already settled.
 
-Pi must acknowledge a `started` or `queued` model turn. Its `handled` disposition means an extension consumed the prompt without starting one; tilde reports that as unverified rather than using the preceding turn's result. Unknown dispositions also fail verification.
+Pi must acknowledge a `started` or `queued` model turn. A `handled` disposition (an extension consumed the prompt) or an unknown one starts nothing: while a turn is running, tilde notes it and lets that turn end on its own; when idle, the follow-up fails at once. When an Amp turn fails with follow-ups queued behind it, they share that failure rather than being sent on.
 
 ## The gate
 

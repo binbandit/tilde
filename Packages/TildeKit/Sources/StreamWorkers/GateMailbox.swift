@@ -69,7 +69,7 @@ final class GateMailbox: Sendable {
             # tilde's gate: hands one tool call to the tilde worker supervising this agent and
             # exits with its verdict (0 allows; 2 rejects, and the agent is shown stderr).
             PATH=/usr/bin:/bin
-            dir=\(shellQuoted(folder(in: scratch).path))
+            dir=\(Shell.quote(folder(in: scratch).path))
             call=$(mktemp "$dir/call.XXXXXX") || exit 2
             { printf '%s\\n' "${AGENT_TOOL_NAME:-unknown}"; cat; } > "$call.part" && mv "$call.part" "$call.request"
             while [ ! -f "$call.verdict" ]; do
@@ -90,9 +90,5 @@ final class GateMailbox: Sendable {
         try Data(script.utf8).write(to: helper, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
         return helper
-    }
-
-    private static func shellQuoted(_ text: String) -> String {
-        "'" + text.replacingOccurrences(of: "'", with: #"'\''"#) + "'"
     }
 }

@@ -131,7 +131,7 @@ extension Conductor {
                     acceptedSubmissions[jobID] == submission, self.job(jobID)?.phase.isActive == true,
                     turnEnded[jobID] == ended, (handed[jobID] ?? .distantPast) <= ended else { return }
                 var diff: DiffStat?
-                if let base = job.baseCommit { diff = try? await Git.checkedDiffStat(workdir: job.workdir, base: base) }
+                if let base = job.baseCommit { diff = try? await Git.diffStat(workdir: job.workdir, base: base) }
                 // Stopped (or taken over) while that was being worked out: it stays that way.
                 guard expectedSubmissions[jobID] == submission, acceptedSubmissions[jobID] == submission,
                     self.job(jobID)?.phase.isActive == true, turnEnded[jobID] == ended,

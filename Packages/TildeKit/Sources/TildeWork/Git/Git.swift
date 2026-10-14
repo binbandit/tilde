@@ -7,6 +7,12 @@ public enum Git {
         try await Shell.check(["git", "rev-parse", "--show-toplevel"], cwd: path)
     }
 
+    /// The git directory all of `repo`'s worktrees share, absolute: `.git` in a plain checkout, elsewhere
+    /// for a submodule or when `repo` is itself a linked worktree.
+    public static func commonDirectory(_ repo: String) async throws -> String {
+        try await Shell.check(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd: repo)
+    }
+
     public static func currentBranch(_ repo: String) async throws -> String {
         try await Shell.check(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd: repo)
     }

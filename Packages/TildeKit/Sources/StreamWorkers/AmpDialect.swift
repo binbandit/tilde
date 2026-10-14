@@ -19,7 +19,6 @@ struct AmpDialect: StreamDialect {
     /// An inference error ends Amp's run with an error result, and the process with it.
     let exitsOnFailure = true
     let briefInPrompt = true
-    let serializesPrompts = true
 
     /// Amp's tools that run commands or change files.
     static let gated = ["Bash", "shell_command", "create_file", "edit_file", "apply_patch", "delete_file", "undo_edit"]
@@ -56,13 +55,8 @@ struct AmpDialect: StreamDialect {
         return .object(settings)
     }
 
-    func prompt(_ text: String, busy: Bool) -> JSON {
-        var message: [String: JSON] = [
-            "type": "user", "message": ["role": "user", "content": [["type": "text", "text": .string(text)]]],
-        ]
-        // Mid-turn, ask Amp to fold it in at the next opportunity rather than after the turn.
-        if busy { message["steer"] = true }
-        return .object(message)
+    func prompt(_ text: String) -> JSON {
+        ["type": "user", "message": ["role": "user", "content": [["type": "text", "text": .string(text)]]]]
     }
 
     func decode(_ line: JSON) -> [StreamSignal] {

@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 import TildeKit
 
@@ -9,7 +10,9 @@ struct SettingsView: View {
     @AppStorage(InletPlacement.displayKey) private var display = ""
     @AppStorage("trigger") private var trigger = "doubleOption"
     @State private var screens = NSScreen.screens
-    @State private var launchAtLogin = LoginItem.makeState()
+    /// macOS owns launch at login; this is what it last said.
+    @State private var loginItem = SMAppService.mainApp.status
+    @State private var loginItemError: String?
 
     var body: some View {
         Form {
@@ -32,25 +35,33 @@ struct SettingsView: View {
                 }
             }
             Section {
-                Toggle("Launch at login", isOn: Binding(
-                    get: { launchAtLogin.isRegistered },
-                    set: { enabled in Task { await launchAtLogin.setEnabled(enabled) } }
-                ))
-                .disabled(launchAtLogin.isUpdating)
-                .accessibilityValue(launchAtLogin.status == .requiresApproval ? "Waiting for approval" : (launchAtLogin.isEnabled ? "On" : "Off"))
-                if launchAtLogin.status == .requiresApproval {
-                    Button("Open Login Items Settings…") { LoginItem.openSystemSettings() }
+                // Waiting for approval counts as on: switching it off withdraws the request.
+                Toggle("Launch at login", isOn: Binding {
+                    loginItem == .enabled || loginItem == .requiresApproval
+                } set: { on in
+                    do {
+                        if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+                        loginItemError = nil
+                    } catch {
+                        loginItemError = error.localizedDescription
+                    }
+                    loginItem = SMAppService.mainApp.status
+                })
+                if loginItem == .requiresApproval {
+                    Button("Open Login Items Settings…") { SMAppService.openSystemSettingsLoginItems() }
                 }
-                if let error = launchAtLogin.error {
-                    Text("Could not change launch at login: \(error)")
+                if let loginItemError {
+                    Text("Couldn't change launch at login: \(loginItemError)")
                         .foregroundStyle(Theme.failed)
                 }
             } header: {
                 Text("Startup")
             } footer: {
-                Text(startupDescription)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                if loginItem == .requiresApproval {
+                    Text("tilde won't open at login until you allow it in Login Items.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
             Section {
                 Picker("Display", selection: connectedDisplay) {
@@ -87,19 +98,9 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
             screens = NSScreen.screens
         }
-        .onAppear { launchAtLogin.refresh() }
+        // Approval happens in System Settings, so look again whenever tilde comes back.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            launchAtLogin.refresh()
-        }
-    }
-
-    private var startupDescription: String {
-        switch launchAtLogin.status {
-        case .notRegistered: "Off. tilde starts when you open it."
-        case .enabled: "tilde will open automatically when you log in to this Mac."
-        case .requiresApproval: "Waiting for approval. tilde will not launch at login until you allow it in System Settings. Turn the switch off to cancel."
-        case .notFound: "macOS could not find this app's login item. Open the installed copy of tilde and try again."
-        case .unknown: "macOS could not determine whether tilde can launch at login."
+            loginItem = SMAppService.mainApp.status
         }
     }
 

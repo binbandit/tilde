@@ -127,6 +127,22 @@ import WorkerKit
         await amp.stop()
     }
 
+    @Test func ampFailedTurnAnswersForTheFollowUpsQueuedBehindIt() async throws {
+        let amp = worker(AmpDialect(), fake: "fake_amp.py")
+        let log = StreamEvents(amp)
+        let first = UUID(), second = UUID()
+        try await amp.start(brief: "gate-then-fail git push origin main", submission: first)
+        let request = try await log.next(StreamPick.request)
+        try await amp.steer("followup", submission: second)
+        await amp.resolve(request.id, .deny("Not before review."))
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: false, text: "Rate limited, try again later"))
+        await amp.stop()
+        _ = try await log.next(StreamPick.exit)
+        #expect(await submissionOrder(log.all) == [
+            "submitted \(first)", "submitted \(second)", "turn false Rate limited, try again later"
+        ])
+    }
+
     @Test func ampStopTerminatesARunningTurn() async throws {
         let amp = worker(AmpDialect(), fake: "fake_amp.py")
         let log = StreamEvents(amp)
@@ -166,31 +182,33 @@ import WorkerKit
         #expect(await submissionOrder(log.all) == ["submitted \(first)", "turn true old result"])
     }
 
-    @Test func piRefusedPromptFailsAfterItsMatchingSubmissionMarker() async throws {
+    @Test(arguments: [("refuse", "Fixture refused the prompt"), ("handled", "Pi handled the prompt without a model turn.")])
+    func piPromptThatStartsNoTurnFailsAfterItsMarker(_ script: String, _ text: String) async throws {
         let pi = worker(PiDialect(), fake: "fake_pi.py", sessionID: "s-refuse")
         let log = StreamEvents(pi)
         let submission = UUID()
-        try await pi.start(brief: "refuse", submission: submission)
-        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: false, text: "Fixture refused the prompt"))
-        #expect(await submissionOrder(log.all) == ["submitted \(submission)", "turn false Fixture refused the prompt"])
+        try await pi.start(brief: script, submission: submission)
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: false, text: text))
+        #expect(await submissionOrder(log.all) == ["submitted \(submission)", "turn false \(text)"])
         await pi.stop()
     }
 
     @Test(arguments: ["handled", "unknown"])
-    func piUnverifiedPromptDispositionCannotUseThePreviousTurn(_ disposition: String) async throws {
+    func piSteerThatJoinsNoTurnLetsTheRunningTurnEnd(_ disposition: String) async throws {
         let pi = worker(PiDialect(), fake: "fake_pi.py", sessionID: "s-disposition")
         let log = StreamEvents(pi)
         let first = UUID(), second = UUID()
         try await pi.start(brief: "hold-before-disposition \(disposition)", submission: first)
         _ = try await log.next { if case .message(let text) = $0 { text } else { nil } }
         try await pi.steer("next", submission: second)
-        let turn = try await log.next(StreamPick.turn)
-        #expect(!turn.ok)
-        #expect(turn.text.contains("model turn"))
+        let notice = try await log.next { if case .notice(let text) = $0 { text } else { nil } }
+        #expect(notice.contains("model turn"))
+        // The run that was going ends once, as itself, after the steer's marker.
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: true, text: "old run finished"))
         await pi.stop()
         _ = try await log.next(StreamPick.exit)
         #expect(await submissionOrder(log.all) == [
-            "submitted \(first)", "submitted \(second)", "turn false \(turn.text)"
+            "submitted \(first)", "submitted \(second)", "turn true old run finished"
         ])
     }
 
@@ -214,6 +232,21 @@ import WorkerKit
         await pi.resolve(question.id, .reply("sticky"))
         #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: true, text: "picked Sticky"))
         await pi.stop()
+    }
+
+    @Test func aRejectedPiSteerCannotInheritTheRunningTurnsSuccess() async throws {
+        let pi = worker(PiDialect(), fake: "fake_pi.py", sessionID: "s-rejected-steer")
+        let log = StreamEvents(pi)
+        let first = UUID(), rejected = UUID()
+        try await pi.start(brief: "hold-before-refuse", submission: first)
+        _ = try await log.next { if case .message(let text) = $0 { text } else { nil } }
+        try await pi.steer("rejected instruction", submission: rejected)
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: false, text: "Fixture refused the prompt"))
+        await pi.stop()
+        _ = try await log.next(StreamPick.exit)
+        #expect(await submissionOrder(log.all) == [
+            "submitted \(first)", "submitted \(rejected)", "turn false Fixture refused the prompt"
+        ])
     }
 
     @Test func piWritesAreJudgedFromTheWorktree() async throws {

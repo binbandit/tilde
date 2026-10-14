@@ -23,7 +23,7 @@ extension Conductor {
             if let previous { _ = await previous.value }
             var safe = gitGuardFailures[jobID] == nil
             if let snapshot, let job {
-                let result = await snapshot.restoreSafely(gitDirectory: (job.repoPath as NSString).appendingPathComponent(".git"))
+                let result = await snapshot.restore()
                 safe = result.refused.isEmpty
                 if safe {
                     if gitGuards[jobID] == snapshot { gitGuards[jobID] = nil }
@@ -80,7 +80,7 @@ extension Conductor {
         guard job.isolation == .worktree else { return nil }
         // A mid-turn steer retains the first baseline. Worker edits are never adopted as owner changes.
         if let existing = gitGuards[job.id] { return existing }
-        return await GitGuard.snapshot(gitDirectory: (job.repoPath as NSString).appendingPathComponent(".git"))
+        return await GitGuard.snapshot(repository: job.repoPath)
     }
 
     /// Install only after the caller rechecks its submission/generation following snapshot's await.

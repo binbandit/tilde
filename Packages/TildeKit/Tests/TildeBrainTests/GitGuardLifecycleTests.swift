@@ -63,7 +63,11 @@ private actor GuardAuditWorker: Worker {
             let repo = root.appending(path: "repo")
             let git = repo.appending(path: ".git")
             let workdir = root.appending(path: "workdir")
-            try FileManager.default.createDirectory(at: git.appending(path: "hooks"), withIntermediateDirectories: true)
+            // Just enough for git to see a repository.
+            for folder in ["hooks", "objects", "refs"] {
+                try FileManager.default.createDirectory(at: git.appending(path: folder), withIntermediateDirectories: true)
+            }
+            try "ref: refs/heads/main\n".write(to: git.appending(path: "HEAD"), atomically: true, encoding: .utf8)
             try FileManager.default.createDirectory(at: workdir, withIntermediateDirectories: true)
             config = git.appending(path: "config")
             try original.write(to: config, atomically: true, encoding: .utf8)
@@ -84,6 +88,12 @@ private actor GuardAuditWorker: Worker {
         }
 
         func configText() throws -> String { try String(contentsOf: config, encoding: .utf8) }
+
+        /// Swaps the config for a link to `target`: a guard can't rebuild it and must not write through it.
+        func linkConfig(to target: URL) throws {
+            try FileManager.default.removeItem(at: config)
+            try FileManager.default.createSymbolicLink(at: config, withDestinationURL: target)
+        }
     }
 
     @Test func publicStopRestoresGuardedConfiguration() async throws {
@@ -118,7 +128,9 @@ private actor GuardAuditWorker: Worker {
     }
     @Test func refusesUnsupportedSnapshotBeforeStartingWorker() async throws {
         let f = try Fixture()
-        try "[extensions]\n\tworktreeConfig = true\n".write(to: f.config, atomically: true, encoding: .utf8)
+        let outside = f.root.appending(path: "outside-config")
+        try f.original.write(to: outside, atomically: true, encoding: .utf8)
+        try f.linkConfig(to: outside)
         await #expect(throws: (any Error).self) { try await f.conductor.spawn(f.job, brief: "", resume: false) }
         #expect(await f.worker.starts == 0)
         #expect(f.conductor.workers[f.job.id] == nil)
@@ -140,9 +152,7 @@ private actor GuardAuditWorker: Worker {
         try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
         let sentinel = outside.appending(path: "sentinel.txt")
         try "preserve outside content".write(to: sentinel, atomically: true, encoding: .utf8)
-        let hooks = f.config.deletingLastPathComponent().appending(path: "hooks")
-        try FileManager.default.removeItem(at: hooks)
-        try FileManager.default.createSymbolicLink(at: hooks, withDestinationURL: outside)
+        try f.linkConfig(to: sentinel)
         switch action {
         case "land":
             await #expect(throws: (any Error).self) { try await f.conductor.land(f.job.id) }
@@ -187,11 +197,9 @@ private actor GuardAuditWorker: Worker {
     @Test func refusedTurnEndCleanupStopsWorkerAndCannotSignOff() async throws {
         let f = try Fixture()
         try await f.conductor.spawn(f.job, brief: "", resume: false)
-        let hooks = f.config.deletingLastPathComponent().appending(path: "hooks")
         let replacement = f.root.appending(path: "replacement")
-        try FileManager.default.createDirectory(at: replacement, withIntermediateDirectories: true)
-        try FileManager.default.removeItem(at: hooks)
-        try FileManager.default.createSymbolicLink(at: hooks, withDestinationURL: replacement)
+        try f.original.write(to: replacement, atomically: true, encoding: .utf8)
+        try f.linkConfig(to: replacement)
         await f.worker.endTurn()
         for _ in 0..<100 where await !f.worker.stopped { try await Task.sleep(for: .milliseconds(10)) }
         #expect(await f.worker.stopped)

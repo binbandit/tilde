@@ -24,8 +24,8 @@ extension Git {
             throw LandFailure(description: "\(job.projectName) has uncommitted changes on \(target). Commit or stash them first.")
         }
 
-        let untracked = try await Shell.check(["git", "ls-files", "--others", "--exclude-standard"], cwd: job.workdir)
-        if try await isDirty(job.workdir) || !untracked.isEmpty {
+        let newFiles = try await untracked(job.workdir)
+        if try await isDirty(job.workdir) || !newFiles.isEmpty {
             try await Shell.check(["git", "add", "-A"], cwd: job.workdir)
             try await Shell.check(["git", "commit", "-m", job.title], cwd: job.workdir)
         }

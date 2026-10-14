@@ -4,6 +4,8 @@ speaking the installed CLI's wire format. The last line of each prompt is a scri
 
   gate <command>  run <command> through the Bash delegate rule, as Amp's permission check does
   fail            end the run with an error result, as Amp does on an inference error
+  gate-then-fail <command>  hold at the gate, then fail
+  end-then-result end the turn, read the next prompt, then send the first run's success result
   crash           exit mid-turn without a result
   hang            start a tool call and never finish the turn
   anything else   reply "<thread> heard: <line>", noting "(briefed)" and "(resumed)"
@@ -65,6 +67,9 @@ for line in sys.stdin:
             {"type": "tool_result", "tool_use_id": "toolu_1", "content": output, "is_error": is_error}]}})
         assistant([{"type": "text", "text": output}], "end_turn")
     elif script == "fail":
+        result_error("Rate limited, try again later")
+    elif script.startswith("gate-then-fail "):
+        bash(script[len("gate-then-fail "):])
         result_error("Rate limited, try again later")
     elif script == "crash":
         sys.exit(3)

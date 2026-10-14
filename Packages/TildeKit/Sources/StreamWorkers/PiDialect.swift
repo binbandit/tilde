@@ -27,7 +27,7 @@ struct PiDialect: StreamDialect {
         return arguments
     }
 
-    func prompt(_ text: String, busy: Bool) -> JSON {
+    func prompt(_ text: String) -> JSON {
         // Pi ignores `streamingBehavior` when idle and steers when busy, so it's always safe to send.
         ["type": "prompt", "message": .string(text), "streamingBehavior": "steer"]
     }
@@ -59,9 +59,7 @@ struct PiDialect: StreamDialect {
                                         disposition: line["data"]?["disposition"]?.string, error: line["error"]?.string)]
             }
             guard line["success"]?.bool == false else { return [] }
-            let error = line["error"]?.string ?? "Pi refused a command."
-            // A refused prompt never starts a run, so nothing else will end the turn.
-            return line["command"]?.string == "prompt" ? [.failure(error), .turnEnded(ok: false)] : [.notice(error)]
+            return [.notice(line["error"]?.string ?? "Pi refused a command.")]
         case "extension_ui_request":
             return request(line)
         default:
