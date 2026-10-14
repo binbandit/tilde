@@ -101,7 +101,7 @@ extension Conductor {
         }
         if let jobID = item.jobID {
             log.append(jobID, "\(Owner.firstName) answered \"\(item.question)\": \(reply)")
-            if !forwarded { record(jobID, .you, .decision, "answered tilde: \(reply)") }
+            if !forwarded, !item.isApproval { record(jobID, .you, .decision, "answered tilde: \(reply)") }
         }
         if let i = thread.firstIndex(where: { $0.attentionID == item.id }) { thread[i].attentionID = nil }
         if item.isApproval {
@@ -252,10 +252,10 @@ extension Conductor {
                 continue
             }
             thread.remove(at: i)
-            if let said = thread[..<i].lastIndex(where: { $0.from == .you }), thread[said].delivery != nil,
+            if let said = thread[..<i].lastIndex(where: { $0.from == .you }), case .read(let at) = thread[said].delivery,
                 thread[(said + 1)..<i].allSatisfy({ $0.from == .tilde && $0.text.isEmpty })
             {
-                thread[said].delivery = .failed("tilde restarted before replying")
+                thread[said].delivery = .failed("tilde restarted before replying", read: at)
             }
         }
         for i in thread.indices where thread[i].delivery == .sent { thread[i].delivery = .failed("tilde restarted before reading it") }

@@ -31,7 +31,7 @@ enum Theme {
     static func tint(_ phase: Job.Phase) -> Color {
         switch phase {
         case .needsYou: amber
-        case .ready, .landed: ready
+        case .ready, .landed, .done: ready
         case .failed: failed
         default: text2
         }

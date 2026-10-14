@@ -11,7 +11,12 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
         case needsYou
         /// The manager has signed the work off; it's waiting for review.
         case ready
-        case landed, failed, stopped
+        /// Brought into the checkout.
+        case landed
+        /// Acknowledged without landing: no changes, scratch work, or work done in place. A worktree
+        /// stays until it's discarded.
+        case done
+        case failed, stopped
 
         public var isActive: Bool { [.starting, .working, .deciding, .needsYou].contains(self) }
         public var isOpen: Bool { isActive || self == .ready }
@@ -47,12 +52,17 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
     /// The manager's sign-off, or the worker's last word.
     public var summary: String?
     public var diff: DiffStat?
-    /// An acknowledged result may retain its worktree; actual landing never sets this.
-    public var acknowledgedAt: Date?
+    /// How the worker's latest turn ended, kept so it can still be signed off after a restart;
+    /// nil while a message is on its way to it or being worked on.
+    public var lastTurn: TurnOutcome?
     /// The pull request for this job's branch, once there is one.
     public var pullRequest: PullRequest?
     public var createdAt: Date
     public var updatedAt: Date
+
+    public enum TurnOutcome: String, Codable, Sendable {
+        case succeeded, failed
+    }
 
     /// The primary review action is based on observed changes, never a model's summary.
     public enum ReviewAction: Sendable {
@@ -66,9 +76,14 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
         return diff.isEmpty ? .acknowledge : .bringIn
     }
 
-    /// Acknowledging a no-change worktree retains it, so explicit cleanup remains available.
+    /// Its worktree or scratch folder can go. Landed work is in the checkout already, as is work done in
+    /// place; work marked done has only a worktree left, kept to look at until it's discarded.
     public var canDiscard: Bool {
-        !phase.isActive && isolation != .inPlace && (phase != .landed || (isolation == .worktree && acknowledgedAt != nil))
+        switch phase {
+        case .landed: false
+        case .done: isolation == .worktree
+        default: !phase.isActive && isolation != .inPlace
+        }
     }
 
     public init(
@@ -87,5 +102,45 @@ public struct Job: Identifiable, Codable, Sendable, Hashable {
         ticker = "Getting started"
         createdAt = .now
         updatedAt = .now
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, brief, projectName, repoPath, workdir, harness, model, isolation
+        case branch, baseBranch, baseCommit, sessionID, phase, ticker, summary, diff, lastTurn, pullRequest
+        case createdAt, updatedAt
+    }
+
+    private enum LegacyKeys: String, CodingKey { case acknowledgedAt }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        title = try values.decode(String.self, forKey: .title)
+        brief = try values.decode(String.self, forKey: .brief)
+        projectName = try values.decode(String.self, forKey: .projectName)
+        repoPath = try values.decode(String.self, forKey: .repoPath)
+        workdir = try values.decode(String.self, forKey: .workdir)
+        harness = try values.decode(Harness.self, forKey: .harness)
+        model = try values.decodeIfPresent(String.self, forKey: .model)
+        isolation = try values.decode(Isolation.self, forKey: .isolation)
+        branch = try values.decodeIfPresent(String.self, forKey: .branch)
+        baseBranch = try values.decodeIfPresent(String.self, forKey: .baseBranch)
+        baseCommit = try values.decodeIfPresent(String.self, forKey: .baseCommit)
+        sessionID = try values.decodeIfPresent(String.self, forKey: .sessionID)
+        phase = try values.decode(Phase.self, forKey: .phase)
+        ticker = try values.decode(String.self, forKey: .ticker)
+        summary = try values.decodeIfPresent(String.self, forKey: .summary)
+        diff = try values.decodeIfPresent(DiffStat.self, forKey: .diff)
+        lastTurn = try values.decodeIfPresent(TurnOutcome.self, forKey: .lastTurn)
+        pullRequest = try values.decodeIfPresent(PullRequest.self, forKey: .pullRequest)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        updatedAt = try values.decode(Date.self, forKey: .updatedAt)
+        // Older builds marked acknowledgements as landed, with this timestamp distinguishing them
+        // from actual landings. Without the marker the old state is ambiguous, so landed stays landed.
+        if phase == .landed,
+            try decoder.container(keyedBy: LegacyKeys.self).decodeIfPresent(Date.self, forKey: .acknowledgedAt) != nil
+        {
+            phase = .done
+        }
     }
 }

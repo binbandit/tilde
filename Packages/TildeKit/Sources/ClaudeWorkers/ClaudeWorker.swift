@@ -85,26 +85,23 @@ public actor ClaudeWorker: Worker, ClaudeHost {
 
         let rail = Rails.check(tool: request.toolName, input: request.input, workdir: workdir)
         var action = Activity.action(tool: request.toolName, input: request.input)
-        // Reaching another host remains a permission request for the owner.
+        // Reaching another host is tilde's call, not a rail for the owner.
         let hosts = rail == nil ? ClaudeSandbox.newHosts(request.input) : nil
         if let hosts { action += "\n(needs the sandbox opened to \(hosts.joined(separator: ", ")))" }
         // Claude's own reason is context for whoever decides, never a rail.
         if let reason = request.reason, !reason.isEmpty { action += "\n(Claude Code says: \(reason))" }
-        let context = PermissionContext(
-            source: .claudeToolCallback, tool: request.toolName, input: request.input,
-            workdir: workdir, blockedPath: request.blockedPath)
-        switch await ask(.permission(tool: request.toolName, action: action, rail: hosts == nil ? rail : nil), context: context) {
+        switch await ask(.permission(tool: request.toolName, action: action, rail: hosts == nil ? rail : nil)) {
         case .allow: return .allow(request.input)
         case .deny(let reason): return .deny(reason)
         case .reply(let text): return .deny(text)
         }
     }
 
-    private func ask(_ kind: WorkerRequest.Kind, context: PermissionContext? = nil) async -> WorkerAnswer {
+    private func ask(_ kind: WorkerRequest.Kind) async -> WorkerAnswer {
         let id = IDs.make("r")
         return await withCheckedContinuation { continuation in
             waiting[id] = continuation
-            emit.yield(.request(WorkerRequest(id: id, kind: kind, permissionContext: context)))
+            emit.yield(.request(WorkerRequest(id: id, kind: kind)))
         }
     }
 

@@ -27,63 +27,21 @@ extension Conductor {
         Task { await manager.post(.init("<owner-message job=\"\(jobID)\">\n\(text)\n</owner-message>", jobs: [jobID])) }
     }
 
-    /// Hands words to a job's agent. One that had stopped picks its session back up.
+    /// Hands words to a job's agent once whatever is already queued for the job is done. One that had
+    /// stopped picks its session back up; a stop before then means they aren't delivered.
     func deliver(_ text: String, to jobID: String, from: JobEntry.Speaker) async throws {
-        guard let job = job(jobID) else { return }
-        guard deliveriesInFlight[jobID] == nil else { throw DeliveryInProgress() }
-        deliveriesInFlight[jobID] = 1
-        defer { deliveriesInFlight[jobID] = nil }
-        let submission = beginSubmission(jobID)
-        do {
-            try await waitForGitSubmission(jobID)
-            guard !Task.isCancelled, expectedSubmissions[jobID] == submission else { throw DeliveryInterrupted() }
-            if let worker = workers[jobID] {
-                // The git setup as it stands now is what this turn is held to.
-                let snapshot = await newGitGuard(for: job)
-                let brief = job.isolation == .scratch ? text
-                    : try RepositoryInstructions.workerBrief(text, repository: job.repoPath, workdir: job.workdir)
-                guard !Task.isCancelled, expectedSubmissions[jobID] == submission,
-                    workers[jobID].map({ $0 === worker }) == true else { throw DeliveryInterrupted() }
-                try installGitGuard(snapshot, for: jobID)
-                update(jobID) {
-                    $0.phase = .working
-                    $0.ticker = from == .you ? "Working on your message" : "Working on feedback"
-                }
-                try await worker.steer(brief, submission: submission)
-                guard !Task.isCancelled, expectedSubmissions[jobID] == submission,
-                    workers[jobID].map({ $0 === worker }) == true else { throw DeliveryInterrupted() }
-                acceptSubmission(submission, for: jobID)
-            } else {
-                try await spawn(job, brief: text, resume: job.sessionID != nil, submission: submission)
-            }
-            record(jobID, from, .message, text)
-        } catch {
-            if expectedSubmissions[jobID] == submission {
-                let stopped = await stopWorker(jobID)
-                if workerGenerations[jobID] == stopped, gitGuardFailures[jobID] == nil {
-                    update(jobID) { $0.phase = .failed; $0.ticker = "Message delivery interrupted" }
-                }
-            }
-            throw error
-        }
+        try await handOver(text, to: jobID, ticker: from == .you ? "Working on your message" : "Working on feedback").value
+        record(jobID, from, .message, text)
     }
 
     /// Stops a job's agent where it is. Its work stays, and a message starts it again.
     public func stop(_ jobID: String) async {
-        let stopped = await stopWorker(jobID)
-        guard workerGenerations[jobID] == stopped, gitGuardFailures[jobID] == nil else { return }
+        let stopping = stopWorker(jobID)
         dropAttention(for: jobID)
         update(jobID) { $0.phase = .stopped; $0.ticker = "Stopped" }
         record(jobID, .you, .event, "Stopped")
         log.append(jobID, "Stopped by \(Owner.firstName)")
         Task { await manager.post(.init("<worker-stopped job=\"\(jobID)\">\(Owner.firstName) stopped it.</worker-stopped>", jobs: [jobID])) }
+        _ = await stopping.result
     }
-}
-
-struct DeliveryInterrupted: Error, CustomStringConvertible {
-    var description: String { "The worker stopped or was replaced while receiving this message. Try again." }
-}
-
-private struct DeliveryInProgress: Error, CustomStringConvertible {
-    var description: String { "A message is still being delivered to this worker. Try again once it is received." }
 }

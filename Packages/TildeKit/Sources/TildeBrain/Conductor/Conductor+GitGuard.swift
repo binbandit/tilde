@@ -1,128 +1,60 @@
 import Foundation
 import TildeSupport
 import TildeWork
-import WorkerKit
 
-/// Same-job barriers keep a new submission from treating an unfinished repair as its baseline.
-/// They do not serialize unrelated jobs that share a repository.
+/// A worktree job's worker can write its repo's git directory (its commits go there), and so what makes
+/// git run code: config like core.fsmonitor, and hooks. git would run that as the owner, outside the
+/// worker's sandbox, the next time anyone uses the repo. So each turn is held to the git setup as it was
+/// when the turn began (`WorkerRun.gitGuard`), and what it changed there is put back when it ends.
+///
+/// This runs on the job's queue, or in a `settle` that queued work waits for: never alongside a turn
+/// starting or another repair.
 extension Conductor {
-    struct GitCleanup {
-        let id: UUID
-        let task: Task<Bool, Never>
+    /// Puts back what changed in the repo's git setup since the current turn began. A setup that can't be
+    /// put back keeps its snapshot, and every later action tries again against that (throwing until it
+    /// can), so nothing a worker left there is ever taken for the owner's own setup.
+    func restoreGitSetup(_ jobID: String) async throws {
+        // Claimed while it's put back, so nothing else puts it back at the same time.
+        guard let snapshot = runs[jobID]?.gitGuard, let job = job(jobID) else { return }
+        runs[jobID]?.gitGuard = nil
+        let result = await snapshot.restore()
+        guard result.refused.isEmpty else {
+            if runs[jobID]?.gitGuard == nil { runs[jobID]?.gitGuard = snapshot }
+            throw GitSetupNeedsReview(paths: result.refused)
+        }
+        guard !result.restored.isEmpty else { return }
+        let what = "The agent changed \(result.restored.joined(separator: ", ")) in the repo's git setup, which make git run code; tilde put them back."
+        Log.info("guard", "\(jobID): \(what)")
+        record(jobID, .tilde, .event, what)
+        emit(.said("\(job.title): \(what)", jobID: jobID))
     }
 
-    /// Reserve synchronously, before any stop/restore await or event-handler Task can yield.
+    /// Before git runs for a worktree job, or a turn starts there: waits for a stopped worker to be gone,
+    /// puts back what it left changed, then checks the setup as it stands, which is what a new turn is held
+    /// to. Throws when any of that can't be done safely; once the owner has sorted the repo out, it can.
     @discardableResult
-    func beginGitCleanup(_ jobID: String, stopping worker: (any Worker)? = nil) -> Task<Bool, Never> {
-        let previous = gitCleanups[jobID]?.task
-        let snapshot = gitGuards[jobID]
-        let job = job(jobID)
-        let token = UUID()
-        let task = Task { @MainActor in
-            await worker?.stop()
-            if let previous { _ = await previous.value }
-            var safe = gitGuardFailures[jobID] == nil
-            if let snapshot, let job {
-                let result = await snapshot.restore()
-                safe = result.refused.isEmpty
-                if safe {
-                    if gitGuards[jobID] == snapshot { gitGuards[jobID] = nil }
-                    gitGuardFailures[jobID] = nil
-                    if !result.restored.isEmpty {
-                        let what = "Restored the job's git setup: \(result.restored.joined(separator: ", "))."
-                        Log.info("guard", "\(jobID): \(what)")
-                        record(jobID, .tilde, .event, what)
-                        emit(.said("\(job.title): \(what)", jobID: jobID))
-                    }
-                } else {
-                    failGitIntegrity(jobID, paths: result.refused)
-                    if let active = workers.removeValue(forKey: jobID) {
-                        workerGenerations[jobID] = UUID()
-                        expectedSubmissions[jobID] = nil
-                        acceptedSubmissions[jobID] = nil
-                        pendingCompletions[jobID] = nil
-                        for (id, pending) in requests where pending.job == jobID { requests.removeValue(forKey: id) }
-                        for item in attention where item.jobID == jobID && item.requestID != nil {
-                            withdraw(item.id, because: "the job's git setup needs review")
-                        }
-                        await active.stop()
-                    }
-                }
-            }
-            if gitCleanups[jobID]?.id == token { gitCleanups[jobID] = nil }
-            return safe
-        }
-        gitCleanups[jobID] = GitCleanup(id: token, task: task)
-        return task
-    }
-
-    func waitForGitCleanup(_ jobID: String) async throws {
-        while let cleanup = gitCleanups[jobID] { _ = await cleanup.task.value }
-        try requireGitIntegrity(jobID)
-    }
-
-    func waitForGitSubmission(_ jobID: String) async throws {
-        while gitCleanups[jobID] != nil || gitReviews[jobID] != nil {
-            if let cleanup = gitCleanups[jobID] { _ = await cleanup.task.value }
-            if gitReviews[jobID] != nil {
-                await withCheckedContinuation { gitReviews[jobID, default: []].append($0) }
-            }
-        }
-        try requireGitIntegrity(jobID)
-    }
-
-    func requireGitIntegrity(_ jobID: String) throws {
-        if let paths = gitGuardFailures[jobID] { throw GitIntegrityFailure(paths: paths) }
-    }
-
-    /// The caller checks its submission/generation again before installing the returned snapshot.
-    func newGitGuard(for job: Job) async -> GitGuard? {
+    func secureGitSetup(_ job: Job) async throws -> GitGuard? {
+        _ = await runs[job.id]?.settling?.result
         guard job.isolation == .worktree else { return nil }
-        // A mid-turn steer retains the first baseline. Worker edits are never adopted as owner changes.
-        if let existing = gitGuards[job.id] { return existing }
-        return await GitGuard.snapshot(repository: job.repoPath)
+        try await restoreGitSetup(job.id)
+        let snapshot = await GitGuard.snapshot(repository: job.repoPath)
+        guard snapshot.snapshotRefusals.isEmpty else { throw GitSetupNeedsReview(paths: snapshot.snapshotRefusals) }
+        return snapshot
     }
 
-    /// Install only after the caller rechecks its submission/generation following snapshot's await.
-    func installGitGuard(_ snapshot: GitGuard?, for jobID: String) throws {
-        if let snapshot, !snapshot.snapshotRefusals.isEmpty {
-            failGitIntegrity(jobID, paths: snapshot.snapshotRefusals)
-            throw GitIntegrityFailure(paths: snapshot.snapshotRefusals)
-        }
-        gitGuards[jobID] = snapshot
-    }
-
-    private func failGitIntegrity(_ jobID: String, paths: [String]) {
-        let first = gitGuardFailures[jobID] != paths
-        gitGuardFailures[jobID] = paths
-        automaticApprovalJobs.remove(jobID)
-        successfulTurns.remove(jobID)
-        update(jobID) { $0.phase = .failed; $0.ticker = "Git setup needs review" }
-        guard first else { return }
-        let message = GitIntegrityFailure(paths: paths).description
-        Log.info("guard", "\(jobID): \(message)")
-        record(jobID, .tilde, .event, message)
-        emit(.trouble("\(job(jobID)?.title ?? jobID): \(message)"))
-    }
-
-    /// Review mutations retain a reservation through cleanup and the final git operation.
-    func beginGitReview(_ jobID: String) throws {
-        guard gitReviews[jobID] == nil else { throw GitReviewInProgress() }
-        gitReviews[jobID] = []
-    }
-
-    func endGitReview(_ jobID: String) {
-        gitReviews.removeValue(forKey: jobID)?.forEach { $0.resume() }
+    /// Tells the owner about a git setup only they can sort out, when no one's waiting on an answer to say so.
+    func needsReview(_ jobID: String, _ error: any Error) {
+        Log.info("guard", "\(jobID): \(error)")
+        record(jobID, .tilde, .event, "\(error)")
+        update(jobID) { $0.ticker = "Git setup needs review" }
+        emit(.trouble("\(job(jobID)?.title ?? jobID): \(error)"))
     }
 }
 
-struct GitIntegrityFailure: Error, CustomStringConvertible {
+/// git mustn't run for the job until someone has looked at its repo's git setup.
+struct GitSetupNeedsReview: Error, CustomStringConvertible {
     let paths: [String]
     var description: String {
-        "Couldn't safely guard the job's git setup (\(paths.joined(separator: ", "))). Work and review actions are paused; the repository metadata needs manual review."
+        "The repo's git setup needs a look: tilde couldn't safely check or put back \(paths.joined(separator: ", ")), so it won't run git or an agent there until that's sorted out."
     }
-}
-
-private struct GitReviewInProgress: Error, CustomStringConvertible {
-    var description: String { "A review action is still finishing for this job." }
 }

@@ -39,8 +39,11 @@ public actor Initiative {
     var seen: Seen
     /// Observations waiting for the right moment.
     var held: [Notice] = []
-    /// One-off follow-ups queued for the manager, still on disk until it accepts them.
-    var pendingFollowUps: Set<String> = []
+    /// One-off follow-ups handed to the manager but not yet taken (they stay in agenda.md until they are),
+    /// by agenda line, with when each may be handed over again.
+    var heldFollowUps: [String: Date] = [:]
+    /// Hand-overs Codex couldn't take in a row, which set how long the next waits.
+    var failedHandOvers = 0
     private var interrupts: [Date] = []
     /// GitHub is asked at most every few minutes; between polls the last answer stands.
     var pulls: [PullRequestWatch.Pull] = []

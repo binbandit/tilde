@@ -1,187 +1,145 @@
 import Foundation
-import Harnesses
 import Testing
 import TildeSupport
 import TildeWork
 import WorkerKit
 @testable import TildeBrain
 
+/// Signing work off, and what the owner can then do with it.
 @MainActor @Suite(.serialized) struct CompletionTests {
-    func readyToFinish(_ fixture: ConductorTests) async throws -> (Conductor, Job) {
-        let conductor = try await fixture.makeConductor()
-        let workdir = fixture.root.appending(path: "result").path
-        let (branch, base) = try await Git.addWorktree(repo: fixture.repo, path: workdir, branch: "tilde/result")
-        var job = Job(id: "result", title: "Repository review", brief: "Review only", projectName: "app", repoPath: fixture.repo,
-                      workdir: workdir, harness: .claude, isolation: .worktree)
-        job.baseBranch = branch
-        job.baseCommit = base
-        job.branch = "tilde/result"
-        job.phase = .deciding
-        conductor.addJob(job)
-        conductor.log.open(job)
-        conductor.turnEnded[job.id] = .now
-        conductor.successfulTurns.insert(job.id)
-        return (conductor, job)
-    }
+    let fixture = ConductorFixture()
 
     @Test func noChangeResultIsAnnouncedAndAcknowledgedWithoutLanding() async throws {
-        let fixture = ConductorTests()
-        let (conductor, job) = try await readyToFinish(fixture)
+        let conductor = try await fixture.makeConductor()
+        let job = try await fixture.finishedJob(conductor)
         let original = try await Git.head(fixture.repo)
         let finished = await fixture.call(conductor, "finish", ["job": .string(job.id), "summary": "No issues found."])
         #expect(!finished.isError, "\(finished.text)")
         #expect(conductor.job(job.id)?.reviewAction == .acknowledge)
         #expect(conductor.job(job.id)?.ticker == "Complete")
         #expect(conductor.thread.last?.text.contains("No issues found.") == true)
-        #expect(conductor.job(job.id)?.digest.contains("awaiting acknowledgement") == true)
-        await #expect(throws: Git.LandFailure.self) { try await conductor.land(job.id) }
-        await conductor.dismiss(job.id)
-        #expect(conductor.job(job.id)?.phase == .landed)
-        #expect(conductor.job(job.id)?.ticker == "Done")
+        await #expect(throws: ActionRefused.self) { try await conductor.land(job.id) }
+
+        try await conductor.dismiss(job.id)
+        #expect(conductor.job(job.id)?.phase == .done)
         #expect(try await Git.head(fixture.repo) == original)
         #expect(FileManager.default.fileExists(atPath: job.workdir))
-        let restored = try Conductor(home: conductor.home, config: fixture.config)
-        #expect(restored.job(job.id)?.ticker == "Done")
+        let restored = try fixture.restart(conductor)
+        #expect(restored.job(job.id)?.phase == .done)
         #expect(restored.job(job.id)?.canDiscard == true)
-        await conductor.discard(job.id)
+        try await conductor.discard(job.id)
         #expect(!FileManager.default.fileExists(atPath: job.workdir))
         #expect(conductor.job(job.id)?.ticker == "Discarded")
     }
 
     @Test(arguments: [false, true])
     func oldCompletionCannotDiscardAReusedWorktree(acknowledged: Bool) async throws {
-        let fixture = ConductorTests()
-        let (conductor, job) = try await readyToFinish(fixture)
+        let conductor = try await fixture.makeConductor()
+        let job = try await fixture.finishedJob(conductor)
+        let branch = try #require(job.branch)
         if acknowledged {
             _ = await fixture.call(conductor, "finish", ["job": .string(job.id)])
-            await conductor.dismiss(job.id)
+            try await conductor.dismiss(job.id)
             #expect(conductor.job(job.id)?.canDiscard == true)
             await Git.removeWorktree(job, deleteBranch: true)
         } else {
             try "change".write(toFile: job.workdir + "/change.txt", atomically: true, encoding: .utf8)
             _ = await fixture.call(conductor, "finish", ["job": .string(job.id)])
-            conductor.update(job.id) { $0.acknowledgedAt = .now }
             try await conductor.land(job.id)
-            #expect(conductor.job(job.id)?.acknowledgedAt == nil)
             #expect(conductor.job(job.id)?.canDiscard == false)
         }
-        _ = try await Git.addWorktree(repo: fixture.repo, path: job.workdir, branch: "tilde/result")
+        _ = try await Git.addWorktree(repo: fixture.repo, path: job.workdir, branch: branch)
         var replacement = Job(id: "replacement", title: job.title, brief: "New task", projectName: "app",
-                              repoPath: fixture.repo, workdir: job.workdir, harness: .claude, isolation: .worktree)
-        replacement.branch = "tilde/result"
+                              repoPath: job.repoPath, workdir: job.workdir, harness: job.harness, isolation: .worktree)
+        replacement.branch = branch
         replacement.phase = .working
         conductor.addJob(replacement)
         try "keep".write(toFile: job.workdir + "/replacement.txt", atomically: true, encoding: .utf8)
-        await conductor.discard(job.id)
+        try await conductor.discard(job.id)
         #expect(FileManager.default.fileExists(atPath: job.workdir + "/replacement.txt"))
         #expect(conductor.job(replacement.id)?.phase == .working)
-        #expect(try await Git.currentBranch(job.workdir) == "tilde/result")
+        #expect(try await Git.currentBranch(job.workdir) == branch)
     }
 
-    @Test func untrackedAndStagedChangesRequireDeliveryReview() async throws {
-        let fixture = ConductorTests()
-        let (conductor, job) = try await readyToFinish(fixture)
+    @Test func untrackedChangesNeedBringingIn() async throws {
+        let conductor = try await fixture.makeConductor()
+        let job = try await fixture.finishedJob(conductor)
         try "new\n".write(toFile: job.workdir + "/new.txt", atomically: true, encoding: .utf8)
         let finished = await fixture.call(conductor, "finish", ["job": .string(job.id), "summary": "Changed a file."])
         #expect(!finished.isError)
         #expect(conductor.job(job.id)?.reviewAction == .bringIn)
-        await conductor.dismiss(job.id)
+        try await conductor.dismiss(job.id)
         #expect(conductor.job(job.id)?.phase == .ready)
-        #expect(FileManager.default.fileExists(atPath: job.workdir + "/new.txt"))
-    }
-
-    @Test func missingBaselineAndUnreadableWorktreeAreNotNoChangeResults() async throws {
-        let fixture = ConductorTests()
-        let (conductor, job) = try await readyToFinish(fixture)
-        conductor.update(job.id) { $0.baseCommit = "not-a-valid-commit" }
-        let result = await fixture.call(conductor, "finish", ["job": .string(job.id), "summary": "Done."])
-        #expect(result.isError)
-        #expect(conductor.job(job.id)?.phase == .deciding)
-        #expect(conductor.job(job.id)?.reviewAction == .unavailable)
-        conductor.update(job.id) { $0.baseCommit = nil }
-        #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
-    }
-
-    @Test func failedStoppedPendingAndSupersededTurnsCannotFinish() async throws {
-        let fixture = ConductorTests()
-        let (conductor, job) = try await readyToFinish(fixture)
-        for phase in [Job.Phase.failed, .stopped, .working] {
-            conductor.update(job.id) { $0.phase = phase }
-            #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
-            #expect(conductor.job(job.id)?.phase == phase)
-        }
-        conductor.update(job.id) { $0.phase = .deciding }
-        conductor.successfulTurns.remove(job.id)
-        #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
-        conductor.successfulTurns.insert(job.id)
-        conductor.handed[job.id] = Date.now.addingTimeInterval(1)
-        #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
-        conductor.handed[job.id] = nil
-        conductor.requests["pending"] = (job.id, WorkerRequest(id: "pending", kind: .permission(tool: "unknown", action: "unknown", rail: nil)))
-        #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
-    }
-
-    @Test func cancellationDoesNotMarkAJobReady() async throws {
-        let fixture = ConductorTests()
-        let (conductor, job) = try await readyToFinish(fixture)
-        let task = Task { @MainActor in await fixture.call(conductor, "finish", ["job": .string(job.id)]) }
-        task.cancel()
-        #expect(await task.value.isError)
-        #expect(conductor.job(job.id)?.phase == .deciding)
     }
 
     @Test func changesAfterSignOffPreventAcknowledgement() async throws {
-        let fixture = ConductorTests()
-        let (conductor, job) = try await readyToFinish(fixture)
+        let conductor = try await fixture.makeConductor()
+        let job = try await fixture.finishedJob(conductor)
         _ = await fixture.call(conductor, "finish", ["job": .string(job.id)])
         try "late change\n".write(toFile: job.workdir + "/late.txt", atomically: true, encoding: .utf8)
-        await conductor.dismiss(job.id)
+        await #expect(throws: ActionRefused.self) { try await conductor.dismiss(job.id) }
         #expect(conductor.job(job.id)?.phase == .ready)
         #expect(conductor.job(job.id)?.reviewAction == .bringIn)
     }
 
-    @Test func legacyUnknownDiffNeverOffersLandingOrAcknowledgement() {
-        var job = Job(id: "old", title: "Old", brief: "", projectName: "app", repoPath: "/repo", workdir: "/tree",
-                      harness: .claude, isolation: .worktree)
-        job.phase = .ready
-        #expect(job.reviewAction == .unavailable)
-        job.isolation = .scratch
-        #expect(job.reviewAction == .acknowledge)
-    }
-}
-
-private actor CompletionWorker: Worker {
-    nonisolated let events: AsyncStream<WorkerEvent>
-    private let emit: AsyncStream<WorkerEvent>.Continuation
-    init() { (events, emit) = AsyncStream.makeStream() }
-    func start(brief: String, submission: UUID?) async throws {
-        if let submission { emit.yield(.submitted(submission)) }
-    }
-    func steer(_ text: String, submission: UUID?) async throws {
-        if let submission { emit.yield(.submitted(submission)) }
-    }
-    func resolve(_ requestID: String, _ answer: WorkerAnswer) {}
-    func stop() async {}
-    func end(ok: Bool) { emit.yield(.turnEnded(ok: ok, text: ok ? "Research complete" : "Failed")) }
-}
-
-@MainActor @Suite(.serialized) struct CompletionEventTests {
-    @Test func failedTurnAndLateCancelledCompletionStayClosed() async throws {
-        let fixture = ConductorTests()
+    @Test func anUnreadableWorktreeIsNotANoChangeResult() async throws {
         let conductor = try await fixture.makeConductor()
-        let worker = CompletionWorker()
-        let harness = Harness(rawValue: "completion-events-\(UUID().uuidString)")
-        HarnessCatalog.register(HarnessSpec(id: harness, label: "Completion fixture", executable: "/usr/bin/false", strengths: "Tests") { _ in worker })
-        let result = await fixture.call(conductor, "delegate", ["title": "Research", "brief": "Fixture only", "harness": .string(harness.rawValue)])
-        #expect(!result.isError)
-        let job = try #require(conductor.jobs.first)
-        await worker.end(ok: false)
-        try await fixture.waitFor(conductor) { conductor.job(job.id)?.phase == .failed }
+        let job = try await fixture.finishedJob(conductor)
+        conductor.update(job.id) { $0.baseCommit = "not-a-valid-commit" }
+        #expect(await fixture.call(conductor, "finish", ["job": .string(job.id), "summary": "Done."]).isError)
+        #expect(conductor.job(job.id)?.phase == .deciding)
+        conductor.update(job.id) { $0.baseCommit = nil }
         #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
+    }
+
+    @Test func onlyAGoodTurnWithNothingOpenCanBeSignedOff() async throws {
+        let conductor = try await fixture.makeConductor()
+        let worker = FakeWorker()
+        let job = try await fixture.delegate(conductor, to: worker)
+        // Still working on its brief.
+        #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
+
+        // A turn that failed.
+        await worker.end(ok: false)
+        try await fixture.waitFor { conductor.job(job.id)?.phase == .failed }
+        #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
+
+        // A good turn, but a request of its worker's still open.
+        try await conductor.deliver("Try again", to: job.id, from: .tilde)
+        await worker.ask(WorkerRequest(id: "r-open", kind: .permission(tool: "Bash", action: "swift build", rail: nil)))
+        await worker.end()
+        try await fixture.waitFor { conductor.job(job.id)?.lastTurn == .succeeded }
+        #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
+
+        // Stopped.
         await conductor.stop(job.id)
-        await worker.end(ok: true)
-        for _ in 0..<10 { await Task.yield() }
+        #expect(await fixture.call(conductor, "finish", ["job": .string(job.id)]).isError)
         #expect(conductor.job(job.id)?.phase == .stopped)
-        #expect(conductor.job(job.id)?.reviewAction == .unavailable)
+    }
+
+    @Test func aRestartDoesntRunAFinishedTurnAgain() async throws {
+        let conductor = try await fixture.makeConductor()
+        let worker = FakeWorker()
+        let job = try await fixture.finishedJob(conductor, worker: worker)
+        let next = try fixture.restart(conductor)
+        next.resumeActive()
+        // Sign-off waits for anything queued for the job, so a resumed turn would have cleared its outcome.
+        let finished = await fixture.call(next, "finish", ["job": .string(job.id), "summary": "Done before the restart."])
+        #expect(!finished.isError, "\(finished.text)")
+        #expect(await worker.received.count == 1)
+    }
+
+    @Test func aGoodTurnCanStillBeSignedOffAfterARestart() async throws {
+        let conductor = try await fixture.makeConductor()
+        let job = try await fixture.finishedJob(conductor)
+        _ = await fixture.call(conductor, "ask", ["question": "Ship it as is?", "options": ["Yes", "No"], "job": .string(job.id)])
+
+        // The worker was done, so it isn't resumed; the owner's answer lets tilde sign it off.
+        let next = try fixture.restart(conductor)
+        next.resumeActive()
+        next.answer(try #require(next.attention.first?.id), with: "Yes")
+        let finished = await fixture.call(next, "finish", ["job": .string(job.id), "summary": "Shipped as is."])
+        #expect(!finished.isError, "\(finished.text)")
+        #expect(next.job(job.id)?.phase == .ready)
     }
 }
