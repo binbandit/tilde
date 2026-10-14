@@ -6,6 +6,10 @@ Every command it receives is appended to $FAKE_LOG. Prompts are scripts:
   write <path>    hold a file write there the same way
   ask <question>  raise a select dialog, as a user's own extension might
   hang            start a tool call and wait until aborted
+  refuse          refuse the prompt
+  handled         take the prompt without starting a run, as an extension command does
+  hold-before-settle[-exit], hold-before-disposition <disposition>
+                  read the next prompt mid-run and answer it in an order the tests pin down
   anything else   reply "<session> heard: <text>", noting "(briefed)"
 
 Prompts that arrive mid-run are queued as steers and answered before the run settles.
@@ -61,6 +65,10 @@ while (command := read()) is not None:
         emit({"id": command.get("id"), "type": "response", "command": "prompt", "success": False,
               "error": "Fixture refused the prompt"})
         continue
+    if command["message"] == "handled":
+        emit({"id": command.get("id"), "type": "response", "command": "prompt", "success": True,
+              "data": {"disposition": "handled"}})
+        continue
     emit({"id": command.get("id"), "type": "response", "command": "prompt", "success": True, "data": {"disposition": "started"}})
     emit({"type": "agent_start"})
     script, steers, answer = command["message"], [], {}
@@ -78,6 +86,7 @@ while (command := read()) is not None:
         following = read()
         emit({"id": following.get("id"), "type": "response", "command": "prompt", "success": True,
               "data": {"disposition": script.split(" ", 1)[1]}})
+        say("old run finished")
     elif script.startswith(("gate ", "write ")):
         verb, target = script.split(" ", 1)
         call = {"tool": "bash", "input": {"command": target}} if verb == "gate" else {"tool": "write", "input": {"path": target}}

@@ -79,8 +79,6 @@ import WorkerKit
         #expect(amp.uses(of: "apply_patch", input: ["input": .string(patch)]).map(\.input) == [
             ["file_path": "Sources/a.swift"], ["file_path": "/etc/hosts"],
         ])
-        #expect(amp.prompt("hi", busy: true)["steer"] == true)
-        #expect(amp.prompt("hi", busy: false)["steer"] == nil)
     }
 
     // MARK: Pi
@@ -94,7 +92,7 @@ import WorkerKit
             "--session-id", "s-1", "--model", "sonnet:high",
         ])
         #expect(try String(contentsOfFile: extensionPath, encoding: .utf8).contains(#"ctx.ui.input("tilde:gate", call"#))
-        #expect(pi.prompt("go", busy: false) == ["type": "prompt", "message": "go", "streamingBehavior": "steer"])
+        #expect(pi.prompt("go") == ["type": "prompt", "message": "go", "streamingBehavior": "steer"])
     }
 
     @Test func piStreamBecomesSignals() throws {

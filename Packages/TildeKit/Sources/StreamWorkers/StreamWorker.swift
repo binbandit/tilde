@@ -27,9 +27,10 @@ public actor StreamWorker: Worker {
     private var lastMessage = ""
     private var failure: String?
     private var waiting: [String: CheckedContinuation<WorkerAnswer, Never>] = [:]
+    /// Follow-ups held for the end of the running turn, when the dialect doesn't acknowledge prompts.
     private var queued: [(text: String, submission: UUID?)] = []
-    private struct PromptSubmission { var id: UUID? }
-    private var promptSubmissions: [String: PromptSubmission] = [:]
+    /// Prompts sent but not yet acknowledged, by request id, with the submission each one carries.
+    private var unacknowledged: [String: UUID?] = [:]
 
     /// A `launch.sessionID` is always resumed: harnesses that mint ids open or create it,
     /// and for the rest an id only exists once the harness has reported it.
@@ -55,7 +56,7 @@ public actor StreamWorker: Worker {
     public func steer(_ text: String, submission: UUID?) async throws {
         try Task.checkCancellation()
         guard !ended else { throw ChildProcess.Failure.stdinClosed }
-        if busy, dialect.serializesPrompts {
+        if busy, !dialect.acknowledgesPrompts {
             queued.append((text, submission))
             return
         }
@@ -72,7 +73,7 @@ public actor StreamWorker: Worker {
         guard !ended else { return }
         ended = true
         queued = []
-        promptSubmissions = [:]
+        unacknowledged = [:]
         denyWaiting()
         if let process {
             if busy, let interrupt = dialect.interrupt, (try? process.write(interrupt.line())) != nil {
@@ -103,7 +104,7 @@ public actor StreamWorker: Worker {
         let process = try ChildProcess(.init(
             executable: executable, arguments: arguments, cwd: launch.workdir, environment: environment))
         self.process = process
-        promptSubmissions = [:]
+        unacknowledged = [:]
         briefPending = dialect.briefInPrompt && session == nil
         if let session { announce(session) }
         Task { await self.pump(process) }
@@ -113,26 +114,20 @@ public actor StreamWorker: Worker {
         try Task.checkCancellation()
         guard let process else { throw ChildProcess.Failure.stdinClosed }
         let text = briefPending ? "\(launch.instructions)\n\n---\n\n\(text)" : text
-        var prompt = dialect.prompt(text, busy: busy)
-        let requestID = dialect.acknowledgesPrompts ? UUID().uuidString.lowercased() : nil
-        if let requestID {
-            promptSubmissions[requestID] = PromptSubmission(id: submission)
-            prompt = prompt.merging(["id": .string(requestID)])
-        } else if let submission {
-            emit.yield(.submitted(submission))
-        }
-        do {
-            try process.write(prompt.line())
-        } catch {
-            if let requestID { promptSubmissions[requestID] = nil }
-            throw error
-        }
+        var prompt = dialect.prompt(text)
+        let id = UUID().uuidString.lowercased()
+        if dialect.acknowledgesPrompts { prompt = prompt.merging(["id": .string(id)]) }
+        try process.write(prompt.line())
         briefPending = false
-        if !busy {
+        if dialect.acknowledgesPrompts {
+            // Its turn begins at the acknowledgment (see `.promptResponse`).
+            unacknowledged.updateValue(submission, forKey: id)
+        } else {
+            if let submission { emit.yield(.submitted(submission)) }
             lastMessage = ""
             failure = nil
+            busy = true
         }
-        busy = true
     }
 
     private func pump(_ process: ChildProcess) async {
@@ -144,7 +139,7 @@ public actor StreamWorker: Worker {
         guard process === self.process, !ended else { return }
         self.process = nil
         // Between turns the process may come and go; the next instruction starts another.
-        guard busy || !promptSubmissions.isEmpty || !queued.isEmpty else { return }
+        guard busy || !unacknowledged.isEmpty else { return }
         let detail = process.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         ended = true
         denyWaiting()
@@ -154,7 +149,7 @@ public actor StreamWorker: Worker {
     private func end(_ detail: String?) {
         busy = false
         queued = []
-        promptSubmissions = [:]
+        unacknowledged = [:]
         mailbox?.close()
         mailbox = nil
         try? FileManager.default.removeItem(at: scratch)
@@ -173,22 +168,26 @@ public actor StreamWorker: Worker {
         }
         switch signal {
         case .promptResponse(let id, let accepted, let disposition, let error):
-            guard let submission = promptSubmissions.removeValue(forKey: id) else { return }
-            // Pi's RPC preflight response is emitted after queue acceptance and before a run
-            // starts. Any old settled event already in stdout stays before this boundary.
-            if let id = submission.id { emit.yield(.submitted(id)) }
-            busy = true
-            if !accepted {
-                failure = error ?? "\(dialect.label) refused the prompt."
-                handle(.turnEnded(ok: false), from: source)
-            } else if disposition != "started", disposition != "queued" {
-                failure = disposition == "handled"
-                    ? "\(dialect.label) handled the prompt without starting or queueing a model turn to verify."
-                    : "\(dialect.label) did not confirm a started or queued model turn (\(disposition ?? "no disposition"))."
-                handle(.turnEnded(ok: false), from: source)
-            } else if disposition == "started" {
+            guard let submission = unacknowledged.removeValue(forKey: id) else { return }
+            // The harness answers before the prompt's run starts: what came before this belongs to earlier turns.
+            if let submission { emit.yield(.submitted(submission)) }
+            switch (accepted, disposition) {
+            case (true, "started"):
+                busy = true
                 lastMessage = ""
                 failure = nil
+            case (true, "queued"):
+                // Folded into the running turn, whose end answers for it.
+                busy = true
+            default:
+                let problem =
+                    if !accepted { error ?? "\(dialect.label) refused the prompt." }
+                    else if disposition == "handled" { "\(dialect.label) handled the prompt without a model turn." }
+                    else { "\(dialect.label) didn't confirm a model turn for the prompt (\(disposition ?? "no disposition"))." }
+                // A running turn still ends on its own, and answers for this prompt too. Otherwise nothing
+                // else will end this one.
+                if busy { emit.yield(.notice(problem)) }
+                else { emit.yield(.turnEnded(ok: false, text: problem)) }
             }
         case .session(let id):
             session = id
@@ -209,28 +208,28 @@ public actor StreamWorker: Worker {
         case .turnEnded(let ok):
             guard busy else { return }
             busy = false
-            let failed = !ok || failure != nil
+            var failed = !ok || failure != nil
             // It's already on its way out: the next instruction starts another process on the
             // session rather than being written into this one as it closes.
             if failed, dialect.exitsOnFailure {
                 process = nil
                 Task { await source.terminate(grace: .seconds(2)) }
             }
-            if !queued.isEmpty {
-                let next = queued
-                queued = []
+            let followUps = queued
+            queued = []
+            if !failed, let last = followUps.last {
+                // They start the next turn, which answers for them.
                 do {
                     if process == nil { try spawn() }
-                    try send(next.map(\.text).joined(separator: "\n\n"), submission: next.last?.submission)
+                    try send(followUps.map(\.text).joined(separator: "\n\n"), submission: last.submission)
+                    return
                 } catch {
-                    // The queued call was already accepted. A failed dispatch must not leave
-                    // its caller waiting indefinitely or sign off the preceding turn.
-                    if let submission = next.last?.submission { emit.yield(.submitted(submission)) }
-                    busy = false
-                    emit.yield(.turnEnded(ok: false, text: "Couldn't submit the queued instruction: \(error)"))
+                    failure = "Couldn't send the follow-up: \(error)"
+                    failed = true
                 }
-                return
             }
+            // A failed turn answers for the follow-ups held behind it, which were never sent.
+            if let submission = followUps.last?.submission { emit.yield(.submitted(submission)) }
             emit.yield(.turnEnded(ok: !failed, text: failed ? failure ?? lastMessage : lastMessage))
         case .gate(let call):
             Task { await gate(call, from: source) }

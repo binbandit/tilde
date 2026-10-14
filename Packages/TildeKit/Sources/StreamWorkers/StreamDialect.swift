@@ -16,16 +16,16 @@ protocol StreamDialect: Sendable {
     var interrupt: JSON? { get }
     /// True when the harness exits after a failed turn, so its process is done with as the turn ends.
     var exitsOnFailure: Bool { get }
-    /// Without correlated acceptance, hold follow-ups until the current turn has ended.
-    var serializesPrompts: Bool { get }
-    /// The prompt protocol echoes an id after accepting it, before its run can settle.
+    /// True when the harness answers a prompt carrying an `id` with `.promptResponse` before anything
+    /// of that prompt's run, so a follow-up can go in mid-turn. Otherwise it waits for the turn to end:
+    /// what the harness says next couldn't be told apart from the running turn's.
     var acknowledgesPrompts: Bool { get }
 
     /// Writes whatever the harness needs into `scratch` (an existing folder outside the
     /// worktree) and returns the arguments for a process on `session`, or a new session when nil.
     func prepare(_ launch: WorkerLaunch, session: String?, scratch: URL) throws -> [String]
-    /// The stdin line that delivers a user message. `busy` means a turn is running.
-    func prompt(_ text: String, busy: Bool) -> JSON
+    /// The stdin line that delivers a user message.
+    func prompt(_ text: String) -> JSON
     func decode(_ line: JSON) -> [StreamSignal]
     /// A harness tool call in Claude Code's names and fields, which `Rails` and `Activity` speak.
     func uses(of tool: String, input: JSON) -> [ToolUse]
@@ -37,7 +37,6 @@ protocol StreamDialect: Sendable {
 extension StreamDialect {
     var interrupt: JSON? { nil }
     var exitsOnFailure: Bool { false }
-    var serializesPrompts: Bool { false }
     var acknowledgesPrompts: Bool { false }
     func answer(_ call: GateCall, _ verdict: GateVerdict) -> JSON? { nil }
     func answer(_ dialog: StreamDialog, _ reply: WorkerAnswer) -> JSON? { nil }
@@ -53,6 +52,8 @@ enum GateChannel: Sendable {
 
 /// One stdout line, translated.
 enum StreamSignal: Sendable, Equatable {
+    /// The answer to the prompt with `id`: whether the harness took it, and what it did with it
+    /// ("started" a run, "queued" it into the running one, or "handled" it without a model turn).
     case promptResponse(id: String, accepted: Bool, disposition: String?, error: String?)
     case session(String)
     case activity(String)
