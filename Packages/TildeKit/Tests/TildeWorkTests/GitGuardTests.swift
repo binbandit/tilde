@@ -247,4 +247,32 @@ import TildeSupport
         try FileManager.default.createSymbolicLink(atPath: "\(hooks)/pre-commit", withDestinationPath: "../missing-hook")
         #expect(await GitGuard.snapshot(repository: repo).snapshotRefusals == ["hooks"])
     }
+
+    @Test(arguments: [false, true])
+    func aRetargetedIntermediateHookLinkIsRefused(directoryLink: Bool) async throws {
+        let ownerHooks = "\(git)/owner-hooks", attackerHooks = "\(git)/attacker-hooks", alias = "\(git)/alias"
+        if directoryLink {
+            try FileManager.default.moveItem(atPath: hooks, toPath: ownerHooks)
+            try FileManager.default.createSymbolicLink(atPath: hooks, withDestinationPath: "alias")
+        } else {
+            try FileManager.default.createDirectory(atPath: ownerHooks, withIntermediateDirectories: false)
+            try FileManager.default.createSymbolicLink(atPath: "\(hooks)/pre-commit", withDestinationPath: "../alias/pre-commit")
+        }
+        try FileManager.default.createDirectory(atPath: attackerHooks, withIntermediateDirectories: false)
+        let original = "#!/bin/sh\nexit 0\n", changed = "#!/bin/sh\necho attacker\n"
+        try write(original, to: "\(ownerHooks)/pre-commit", mode: 0o755)
+        try write(changed, to: "\(attackerHooks)/pre-commit", mode: 0o755)
+        try FileManager.default.createSymbolicLink(atPath: alias, withDestinationPath: "owner-hooks")
+        let guarded = await GitGuard.snapshot(repository: repo)
+        #expect(guarded.snapshotRefusals.isEmpty)
+        #expect(await guarded.restore() == GitGuard.Restoration())
+
+        // The first link and snapshotted canonical target stay unchanged; only this middle link changes.
+        try FileManager.default.removeItem(atPath: alias)
+        try FileManager.default.createSymbolicLink(atPath: alias, withDestinationPath: "attacker-hooks")
+        #expect(await guarded.restore() == GitGuard.Restoration(refused: ["hooks"]))
+        #expect(try read("\(ownerHooks)/pre-commit") == original)
+        #expect(try read("\(attackerHooks)/pre-commit") == changed)
+        #expect(link(directoryLink ? hooks : "\(hooks)/pre-commit") == (directoryLink ? "alias" : "../alias/pre-commit"))
+    }
 }

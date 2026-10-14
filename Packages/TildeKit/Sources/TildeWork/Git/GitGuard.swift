@@ -79,8 +79,12 @@ public struct GitGuard: Sendable, Equatable {
                 let target = URL(fileURLWithPath: hooksPath).appending(path: name).resolvingSymlinksInPath()
                 let parent = try Directory(path: target.deletingLastPathComponent().path)
                 let file = try parent.regularFile(target.lastPathComponent)
+                guard URL(fileURLWithPath: hooksPath).appending(path: name).resolvingSymlinksInPath().path == target.path else { throw IOFailure() }
                 snapshot.hookFileTargets[name] = HookFileTarget(
                     path: target.path, parent: parent.identity, identity: file.identity, entry: file.entry)
+            }
+            if let target = snapshot.hooksTarget {
+                guard URL(fileURLWithPath: "\(path)/hooks").resolvingSymlinksInPath().path == target.path else { throw IOFailure() }
             }
         } catch { snapshot.snapshotRefusals.append("hooks") }
         if !root.matches(path: path) { snapshot.snapshotRefusals.append("git directory") }
@@ -186,11 +190,16 @@ public struct GitGuard: Sendable, Equatable {
         func stillAnchored() throws -> Bool {
             guard root.matches(path: gitDirectory) else { return false }
             if let target = hooksTarget, let link = hooksLink {
-                guard directory.matches(path: target.path) else { return false }
+                guard directory.matches(path: target.path),
+                    URL(fileURLWithPath: "\(gitDirectory)/hooks").resolvingSymlinksInPath().path == target.path else { return false }
                 return try root.entry("hooks") == .link(link)
             }
             return try root.child("hooks")?.identity == directory.identity
         }
+        func stillResolves(_ name: String, to target: String) -> Bool {
+            URL(fileURLWithPath: "\(gitDirectory)/hooks").appending(path: name).resolvingSymlinksInPath().path == target
+        }
+        guard try stillAnchored() else { throw IOFailure() }
         let now = try Self.hookEntries(in: directory)
         for name in Set(now.keys).union(hooks.keys).sorted() where now[name] != hooks[name] {
             guard try stillAnchored() else { throw IOFailure() }
@@ -199,6 +208,7 @@ public struct GitGuard: Sendable, Equatable {
             restored.append("hooks/\(name)")
         }
         for (name, target) in hookFileTargets.sorted(by: { $0.key < $1.key }) {
+            guard stillResolves(name, to: target.path) else { throw IOFailure() }
             let path = URL(fileURLWithPath: target.path)
             let parentPath = path.deletingLastPathComponent().path
             let parent = try Directory(path: parentPath)
@@ -209,10 +219,12 @@ public struct GitGuard: Sendable, Equatable {
             // A replaced target needs manual review. Only the snapshotted file may be repaired.
             guard file.identity == target.identity, parent.matches(path: parentPath) else { throw IOFailure() }
             try parent.put(target.entry, at: path.lastPathComponent)
-            guard parent.matches(path: parentPath), try parent.entry(path.lastPathComponent) == target.entry else { throw IOFailure() }
+            guard parent.matches(path: parentPath), stillResolves(name, to: target.path),
+                try parent.entry(path.lastPathComponent) == target.entry else { throw IOFailure() }
             restored.append("hooks/\(name):target")
         }
-        guard try stillAnchored(), try Self.hookEntries(in: directory) == hooks else { throw IOFailure() }
+        guard try stillAnchored(), try Self.hookEntries(in: directory) == hooks,
+            hookFileTargets.allSatisfy({ stillResolves($0.key, to: $0.value.path) }) else { throw IOFailure() }
         return restored
     }
 
