@@ -2,268 +2,220 @@ import Darwin
 import Foundation
 import TildeSupport
 
-/// Restores code-running git configuration and hooks after a worker's turn. File access is relative
-/// to verified directory descriptors: a replaced path must never redirect a repair outside the repo.
+/// The parts of a repo's git directory that make git run code: config keys like `core.fsmonitor` (run by
+/// every `git status`, in the owner's prompt too), diff and filter drivers, aliases, includes, credential
+/// helpers, and the hooks. A worker in a worktree writes objects and refs there, never these; tilde notes
+/// them before a worker's turn and puts back whatever the turn changed. The rest of the config (a branch's
+/// upstream, a new remote) is left alone.
+///
+/// Config is only parsed and edited as a private copy with `git config --file`, which runs none of it, and
+/// written back under git's own `config.lock`. Everything is read with `lstat` and put back by renaming a
+/// fresh copy into place, so a link planted where a file was is replaced, never written through.
 public struct GitGuard: Sendable, Equatable {
-    struct Hook: Sendable, Equatable {
-        var data: Data
-        var permissions: Int
+    enum Entry: Sendable, Equatable {
+        case file(Data, mode: mode_t)
+        case link(String)
+        case directory
     }
 
     public struct Restoration: Sendable, Equatable {
         public var restored: [String] = []
-        /// Paths that could not be inspected or restored safely. Callers must not continue as if repaired.
+        /// What couldn't be put back. The job's git setup needs the owner's review before work goes on.
         public var refused: [String] = []
-
-        public init(restored: [String] = [], refused: [String] = []) {
-            self.restored = restored
-            self.refused = refused
-        }
     }
 
-    private var directory: Identity?
-    private var hookDirectory: Identity?
-    private var configs: [String: [String: [String]]] = [:]
-    private var hooks: [String: Hook] = [:]
-    private var snapshotFailures: [String] = []
+    /// The git directory all the repo's worktrees share.
+    let gitDirectory: String
+    /// Code-running keys and their values, by config file (relative to `gitDirectory`).
+    var configs: [String: [String: [String]]] = [:]
+    /// Where `hooks` pointed, when it's a link rather than a directory of hooks.
+    var hooksLink: String?
+    var hooks: [String: Entry] = [:]
+    /// What couldn't be read, so can't be guarded: a worker must not start.
+    public private(set) var snapshotRefusals: [String] = []
 
-    /// A worker must not start when its git metadata cannot be safely guarded.
-    public var snapshotRefusals: [String] { snapshotFailures }
-
-    // Enabling worktreeConfig can introduce another source of executable configuration.
+    /// Config keys whose values git runs, matched without case against keys as `git config --list` prints
+    /// them (a subsection keeps its case). Turning on `extensions.worktreeConfig` makes git read more files.
     static let runsCode =
         #"^(core\.(fsmonitor|hookspath|sshcommand|pager|editor|askpass|gitproxy)|diff\.external|diff\..+\.(textconv|command)|filter\..+\.(clean|smudge|process)|merge\..+\.driver|alias\..+|include\.path|includeif\..+\.path|credential\.(.+\.)?helper|gpg\.(.+\.)?program|sequence\.editor|pager\..+|interactive\.difffilter|uploadpack\.packobjectshook|extensions\.worktreeconfig)$"#
 
-    public static func snapshot(gitDirectory: String) async -> GitGuard {
-        var snapshot = GitGuard()
-        guard let root = try? Directory(path: gitDirectory) else {
-            snapshot.snapshotFailures = ["git directory"]
-            return snapshot
+    public static func snapshot(repository: String) async -> GitGuard {
+        guard let path = try? await Git.commonDirectory(repository) else {
+            return GitGuard(gitDirectory: repository, snapshotRefusals: ["git directory"])
         }
-        snapshot.directory = root.identity
-        for name in ["config", "config.worktree"] {
-            do { snapshot.configs[name] = try await codeKeys(root.read(name)?.data ?? Data()) }
-            catch { snapshot.snapshotFailures.append(name) }
-        }
-        // Linked worktrees store their own config under worktrees/<name>/config.worktree.
-        // Until those directories are independently anchored, fail closed for enabled repositories.
-        if let value = snapshot.configs["config"]?["extensions.worktreeconfig"]?.last,
-            !["false", "no", "off", "0"].contains(value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
-        {
-            snapshot.snapshotFailures.append("extensions.worktreeConfig")
-        }
+        var snapshot = GitGuard(gitDirectory: path)
         do {
-            if let directory = try root.child("hooks") {
-                snapshot.hookDirectory = directory.identity
-                snapshot.hooks = try directory.files()
+            let config = try await codeKeys(snapshot.config("config")?.data ?? Data())
+            snapshot.configs["config"] = config
+            for file in snapshot.worktreeConfigs(config) {
+                snapshot.configs[file] = try await codeKeys(snapshot.config(file)?.data ?? Data())
             }
-        } catch { snapshot.snapshotFailures.append("hooks") }
+        } catch { snapshot.snapshotRefusals.append("config") }
+        do {
+            switch try entry(at: "\(path)/hooks") {
+            case .link(let target)?: snapshot.hooksLink = target
+            case .directory?: snapshot.hooks = try snapshot.hookEntries()
+            case .file?: throw IOFailure()
+            case nil: break
+            }
+        } catch { snapshot.snapshotRefusals.append("hooks") }
         return snapshot
     }
 
-    /// Compatibility for callers that only display repaired keys. Use restoreSafely to handle refusals.
-    @discardableResult
-    public func restore(gitDirectory: String) async -> [String] {
-        await restoreSafely(gitDirectory: gitDirectory).restored
-    }
-
-    /// Refuses changed directory identities, symlinks and non-regular files, without following them.
-    /// Ordinary file replacement is allowed because git config uses atomic replacement itself.
-    public func restoreSafely(gitDirectory: String) async -> Restoration {
-        guard snapshotFailures.isEmpty else { return Restoration(refused: snapshotFailures) }
-        guard let root = try? Directory(path: gitDirectory), root.identity == directory else {
-            return Restoration(refused: ["git directory"])
-        }
+    /// Puts back what changed since the snapshot and says what that was.
+    public func restore() async -> Restoration {
+        guard snapshotRefusals.isEmpty else { return Restoration(refused: snapshotRefusals) }
         var result = Restoration()
-        for name in ["config", "config.worktree"] {
-            do {
-                let current = try root.read(name)
-                let before = configs[name] ?? [:]
-                let (replacement, changed) = try await restoredConfig(current?.data ?? Data(), before: before)
-                guard !changed.isEmpty else { continue }
-                // The root may have been moved while git parsed the private copy.
-                guard root.matches(path: gitDirectory) else { throw UnsafePath() }
-                try root.replace(name, with: replacement, permissions: current?.permissions ?? 0o644)
-                result.restored += changed.map { name == "config" ? $0 : "\(name):\($0)" }
-            } catch { result.refused.append(name) }
+        for (file, before) in configs.sorted(by: { $0.key < $1.key }) {
+            do { result.restored += try await restoreConfig(file, to: before).map { file == "config" ? $0 : "\(file):\($0)" } }
+            catch { result.refused.append(file) }
         }
-        do {
-            guard root.matches(path: gitDirectory) else { throw UnsafePath() }
-            if let current = try root.child("hooks") {
-                guard hookDirectory == nil || hookDirectory == current.identity else { throw UnsafePath() }
-                let now = try current.files()
-                for name in Set(now.keys).union(hooks.keys).sorted() where now[name] != hooks[name] {
-                    guard root.matches(path: gitDirectory), try root.child("hooks")?.identity == current.identity else {
-                        throw UnsafePath()
-                    }
-                    if let hook = hooks[name] {
-                        try current.replace(name, with: hook.data, permissions: hook.permissions)
-                    } else {
-                        try current.remove(name)
-                    }
-                    result.restored.append("hooks/\(name)")
-                }
-            } else if hookDirectory != nil {
-                // Do not recreate a removed or moved directory at a potentially substituted location.
-                throw UnsafePath()
-            }
-        } catch { result.refused.append("hooks") }
-        for path in await restorationFailures(gitDirectory: gitDirectory) where !result.refused.contains(path) {
-            result.refused.append(path)
-        }
-        // A repair is only reported as successful when the observed final state is consistent.
-        if !result.refused.isEmpty { result.restored = [] }
+        do { result.restored += try restoreHooks() } catch { result.refused.append("hooks") }
         return result
     }
 
-    /// Checks the observed result without rejecting unrelated branch or remote configuration changes.
-    /// This detects interference during restoration; it does not lock out every concurrent git writer.
-    func restorationFailures(gitDirectory: String) async -> [String] {
-        guard let root = try? Directory(path: gitDirectory), root.identity == directory else { return ["git directory"] }
-        var failed: [String] = []
-        for name in ["config", "config.worktree"] {
-            do {
-                let keys = try await Self.codeKeys(root.read(name)?.data ?? Data())
-                if keys != (configs[name] ?? [:]) { failed.append(name) }
-            } catch { failed.append(name) }
+    /// With `extensions.worktreeConfig` on in `config`, git also reads each worktree's own `config.worktree`:
+    /// the main worktree's beside `config`, a linked one's (a job's) under `worktrees/<name>`.
+    private func worktreeConfigs(_ config: [String: [String]]) -> [String] {
+        // Over-guarding is harmless, so anything but an explicit false counts as on.
+        guard let value = config["extensions.worktreeconfig"]?.last, !["false", "no", "off", "0"].contains(value.lowercased()) else {
+            return []
         }
-        do {
-            guard root.matches(path: gitDirectory) else { return ["git directory"] }
-            if let current = try root.child("hooks") {
-                guard hookDirectory == nil || hookDirectory == current.identity, try current.files() == hooks else {
-                    throw UnsafePath()
-                }
-            } else if hookDirectory != nil { throw UnsafePath() }
-        } catch { failed.append("hooks") }
-        return failed
+        let linked = (try? FileManager.default.contentsOfDirectory(atPath: "\(gitDirectory)/worktrees")) ?? []
+        return ["config.worktree"] + linked.map { "worktrees/\($0)/config.worktree" }
     }
 
-    private struct UnsafePath: Error {}
-
-    private struct Identity: Sendable, Equatable {
-        let device: dev_t
-        let inode: ino_t
-        init(_ info: stat) { device = info.st_dev; inode = info.st_ino }
+    /// A config file's contents and mode: empty when there's none, nil when its folder is gone too (a linked
+    /// worktree removed). Git would follow a link here, and only the code-running keys are known, so anything
+    /// but a regular file can't be guarded or rebuilt.
+    private func config(_ file: String) throws -> (data: Data, mode: mode_t)? {
+        let path = "\(gitDirectory)/\(file)"
+        switch try Self.entry(at: path) {
+        case .file(let data, let mode)?: return (data, mode)
+        case nil: return FileManager.default.fileExists(atPath: (path as NSString).deletingLastPathComponent) ? (Data(), 0o644) : nil
+        default: throw IOFailure()
+        }
     }
 
-    /// Descriptors anchor access even if a pathname changes between validation and an operation.
-    private final class Directory: Sendable {
-        let fd: Int32
-        let identity: Identity
-
-        convenience init(path: String) throws {
-            let fd = Darwin.open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            guard fd >= 0 else { throw UnsafePath() }
-            do { try self.init(fd: fd) } catch { Darwin.close(fd); throw error }
+    /// Reverts `file`'s code-running keys under git's lock, so a concurrent `git config` (or another job's
+    /// guard) can't lose a write. Returns the keys that had changed.
+    private func restoreConfig(_ file: String, to before: [String: [String]]) async throws -> [String] {
+        guard let unlocked = try config(file), try await Self.codeKeys(unlocked.data) != before else { return [] }
+        let path = "\(gitDirectory)/\(file)", lock = path + ".lock"
+        let locked = try await Self.lock(lock)
+        var committed = false
+        defer {
+            close(locked)
+            if !committed { unlink(lock) }
         }
+        guard let current = try config(file) else { return [] }
+        let (replacement, changed) = try await Self.reverted(current.data, to: before)
+        guard !changed.isEmpty else { return [] }
+        guard fchmod(locked, current.mode) == 0 else { throw IOFailure() }
+        try FileHandle(fileDescriptor: locked).write(contentsOf: replacement)
+        guard rename(lock, path) == 0 else { throw IOFailure() }
+        committed = true
+        return changed
+    }
 
-        private init(fd: Int32) throws {
-            var info = stat()
-            guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { throw UnsafePath() }
-            self.fd = fd
-            identity = Identity(info)
+    private func restoreHooks() throws -> [String] {
+        let path = "\(gitDirectory)/hooks"
+        let current = try Self.entry(at: path)
+        if let hooksLink {
+            guard current != .link(hooksLink) else { return [] }
+            try Self.put(.link(hooksLink), at: path)
+            return ["hooks"]
         }
-
-        deinit { Darwin.close(fd) }
-
-        func matches(path: String) -> Bool { (try? Directory(path: path))?.identity == identity }
-
-        func child(_ name: String) throws -> Directory? {
-            let child = openat(fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            if child < 0, errno == ENOENT { return nil }
-            guard child >= 0 else { throw UnsafePath() }
-            do { return try Directory(fd: child) } catch { Darwin.close(child); throw error }
+        var restored: [String] = []
+        switch current {
+        case .directory?: break
+        case nil where hooks.isEmpty: return []
+        default:
+            // A link or file in its place goes (unlinking never follows a link) and a fresh directory takes it.
+            if current != nil, unlink(path) != 0 { throw IOFailure() }
+            guard mkdir(path, 0o755) == 0 else { throw IOFailure() }
+            restored.append("hooks")
         }
-
-        func read(_ name: String) throws -> Hook? {
-            let file = openat(fd, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-            if file < 0, errno == ENOENT { return nil }
-            guard file >= 0 else { throw UnsafePath() }
-            let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
-            var info = stat()
-            guard fstat(file, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw UnsafePath() }
-            return Hook(data: try handle.readToEnd() ?? Data(), permissions: Int(info.st_mode & 0o7777))
-        }
-
-        func files() throws -> [String: Hook] {
-            // A fresh description gives each enumeration its own offset.
-            let listing = openat(fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-            guard listing >= 0 else { throw UnsafePath() }
-            guard let stream = fdopendir(listing) else { Darwin.close(listing); throw UnsafePath() }
-            defer { closedir(stream) }
-            var files: [String: Hook] = [:]
-            while true {
-                errno = 0
-                guard let entry = readdir(stream) else {
-                    guard errno == 0 else { throw UnsafePath() }
-                    break
-                }
-                let name = withUnsafePointer(to: &entry.pointee.d_name) {
-                    $0.withMemoryRebound(to: CChar.self, capacity: Int(entry.pointee.d_namlen) + 1) { String(cString: $0) }
-                }
-                guard name != ".", name != ".." else { continue }
-                // Git ignores directories in hooks; never descend into one.
-                var info = stat()
-                guard fstatat(fd, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { throw UnsafePath() }
-                if info.st_mode & S_IFMT == S_IFDIR { continue }
-                guard let file = try read(name) else { throw UnsafePath() }
-                files[name] = file
+        let now = try hookEntries()
+        for name in Set(now.keys).union(hooks.keys).sorted() where now[name] != hooks[name] {
+            if let hook = hooks[name] {
+                try Self.put(hook, at: "\(path)/\(name)")
+            } else if unlink("\(path)/\(name)") != 0 {
+                throw IOFailure()
             }
-            return files
+            restored.append("hooks/\(name)")
         }
+        return restored
+    }
 
-        func replace(_ name: String, with data: Data, permissions: Int) throws {
-            // Validate the destination without following a final symlink. Rename itself also never follows it.
-            _ = try read(name)
-            let temporary = ".tilde-guard-\(UUID().uuidString)"
-            let file = openat(fd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode_t(0o600))
-            guard file >= 0 else { throw UnsafePath() }
-            let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
-            defer { _ = unlinkat(fd, temporary, 0) }
-            try handle.write(contentsOf: data)
-            guard fchmod(file, mode_t(permissions)) == 0, renameat(fd, temporary, fd, name) == 0 else { throw UnsafePath() }
+    /// The files and links in `hooks`. Git never runs a directory as a hook.
+    private func hookEntries() throws -> [String: Entry] {
+        let path = "\(gitDirectory)/hooks"
+        var entries: [String: Entry] = [:]
+        for name in try FileManager.default.contentsOfDirectory(atPath: path) {
+            if let entry = try Self.entry(at: "\(path)/\(name)"), entry != .directory { entries[name] = entry }
         }
+        return entries
+    }
 
-        func remove(_ name: String) throws {
-            _ = try read(name)
-            guard unlinkat(fd, name, 0) == 0 else { throw UnsafePath() }
+    /// What's at `path`, without following a link there; nil when nothing is.
+    private static func entry(at path: String) throws -> Entry? {
+        var info = stat()
+        guard lstat(path, &info) == 0 else {
+            if errno == ENOENT { return nil }
+            throw IOFailure()
+        }
+        switch info.st_mode & S_IFMT {
+        case S_IFLNK: return .link(try FileManager.default.destinationOfSymbolicLink(atPath: path))
+        case S_IFDIR: return .directory
+        case S_IFREG:
+            guard let data = FileManager.default.contents(atPath: path) else { throw IOFailure() }
+            return .file(data, mode: info.st_mode & 0o7777)
+        default: throw IOFailure()
         }
     }
 
-    // Git parses and edits a private regular copy, never an untrusted path in the worker's directory.
-    private static func withConfig<T>(_ data: Data, _ body: (String) async throws -> T) async throws -> T {
-        let folder = FileManager.default.temporaryDirectory.appending(path: "tilde-guard-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let path = folder.appending(path: "config").path
-        try data.write(to: URL(fileURLWithPath: path))
-        return try await body(path)
-    }
-
-    private static func keys(in path: String) async throws -> [String: [String]] {
-        let output = try await Shell.run(["git", "config", "--file", path, "--list", "--null"], timeout: .seconds(10))
-        guard output.ok else { throw UnsafePath() }
-        var keys: [String: [String]] = [:]
-        for entry in output.stdout.split(separator: "\0") {
-            let parts = entry.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
-            let key = String(parts[0]).lowercased()
-            guard key.range(of: runsCode, options: .regularExpression) != nil else { continue }
-            keys[key, default: []].append(parts.count > 1 ? String(parts[1]) : "")
+    /// Renames a fresh copy of `entry` over `path`, which replaces a link there rather than following it.
+    private static func put(_ entry: Entry, at path: String) throws {
+        let temporary = "\((path as NSString).deletingLastPathComponent)/.tilde-\(UUID().uuidString)"
+        do {
+            switch entry {
+            case .file(let data, let mode):
+                try data.write(to: URL(fileURLWithPath: temporary), options: .withoutOverwriting)
+                try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: temporary)
+            case .link(let target):
+                try FileManager.default.createSymbolicLink(atPath: temporary, withDestinationPath: target)
+            case .directory:
+                throw IOFailure()
+            }
+            guard rename(temporary, path) == 0 else { throw IOFailure() }
+        } catch {
+            unlink(temporary)
+            throw error
         }
-        return keys
     }
 
-    private static func codeKeys(_ data: Data) async throws -> [String: [String]] {
-        try await withConfig(data) { try await keys(in: $0) }
+    /// Creates `path` as git takes a lock, only if nothing is there, and returns its descriptor. Waits a
+    /// while for another holder.
+    private static func lock(_ path: String) async throws -> Int32 {
+        let deadline = ContinuousClock.now + .seconds(2)
+        while true {
+            let file = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            if file >= 0 { return file }
+            guard errno == EEXIST, ContinuousClock.now < deadline else { throw IOFailure() }
+            try await Task.sleep(for: .milliseconds(20))
+        }
     }
 
-    private func restoredConfig(_ data: Data, before: [String: [String]]) async throws -> (Data, [String]) {
-        try await Self.withConfig(data) { path in
-            let now = try await Self.keys(in: path)
+    /// `config` with its code-running keys put back to `before`, and which keys that changed.
+    private static func reverted(_ config: Data, to before: [String: [String]]) async throws -> (Data, [String]) {
+        try await withCopy(of: config) { path in
+            let now = try await keys(in: path)
             let changed = Set(now.keys).union(before.keys).sorted().filter { now[$0] != before[$0] }
             for key in changed {
                 let unset = try await Shell.run(["git", "config", "--file", path, "--unset-all", key])
-                guard unset.ok || unset.status == 5 else { throw UnsafePath() }
+                // 5: it isn't set, because the turn removed it.
+                guard unset.ok || unset.status == 5 else { throw IOFailure() }
                 for value in before[key] ?? [] {
                     try await Shell.check(["git", "config", "--file", path, "--add", key, value])
                 }
@@ -271,4 +223,32 @@ public struct GitGuard: Sendable, Equatable {
             return (try Data(contentsOf: URL(fileURLWithPath: path)), changed)
         }
     }
+
+    private static func codeKeys(_ config: Data) async throws -> [String: [String]] {
+        try await withCopy(of: config) { try await keys(in: $0) }
+    }
+
+    private static func keys(in path: String) async throws -> [String: [String]] {
+        let output = try await Shell.run(["git", "config", "--file", path, "--list", "--null"], timeout: .seconds(10))
+        guard output.ok else { throw IOFailure() }
+        var keys: [String: [String]] = [:]
+        for entry in output.stdout.split(separator: "\0") {
+            let parts = entry.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
+            let key = String(parts[0])
+            guard key.range(of: runsCode, options: [.regularExpression, .caseInsensitive]) != nil else { continue }
+            keys[key, default: []].append(parts.count > 1 ? String(parts[1]) : "")
+        }
+        return keys
+    }
+
+    private static func withCopy<T>(of config: Data, _ body: (String) async throws -> T) async throws -> T {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "tilde-guard-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let path = folder.appending(path: "config").path
+        try config.write(to: URL(fileURLWithPath: path))
+        return try await body(path)
+    }
+
+    private struct IOFailure: Error {}
 }
