@@ -41,17 +41,17 @@ install destination="": (build "Release")
     trap cleanup EXIT
     ditto {{quote(products / "Release/tilde.app")}} "$stage/tilde.app"
     # AppKit handles identify the bundle and executable, and avoid PID reuse.
-    stop() {
-        osascript -l JavaScript <<'JXA'
-    function run() {
+    lifecycle() {
+        osascript -l JavaScript - "$@" <<'JXA'
+    function run(args) {
         ObjC.import('AppKit');
+        function path(url) { return ObjC.unwrap(url.URLByResolvingSymlinksInPath.path); }
         function running() {
             var found = [], apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier('dev.tilde.app');
             for (var i = 0; i < apps.count; i++) {
                 var app = apps.objectAtIndex(i);
                 if (app.isTerminated) continue;
-                var bundle = ObjC.unwrap(app.bundleURL.URLByResolvingSymlinksInPath.path);
-                var executable = ObjC.unwrap(app.executableURL.URLByResolvingSymlinksInPath.path);
+                var bundle = path(app.bundleURL), executable = path(app.executableURL);
                 if (/\.app$/i.test(bundle) && executable === bundle + '/Contents/MacOS/tilde') found.push(app);
             }
             return found;
@@ -64,35 +64,59 @@ install destination="": (build "Release")
             }
             return true;
         }
+        if (args[0] === 'recover') {
+            var active = running().map(function(app) { return path(app.bundleURL); });
+            var excluded = args[2] ? path($.NSURL.fileURLWithPath(args[2])) : null, failed = [];
+            JSON.parse(args[1]).forEach(function(bundle) {
+                if (bundle === excluded || active.indexOf(bundle) !== -1) return;
+                try {
+                    var app = $.NSBundle.bundleWithPath(bundle);
+                    if (ObjC.unwrap(app.bundleIdentifier) !== 'dev.tilde.app' || path(app.executableURL) !== bundle + '/Contents/MacOS/tilde') throw new Error('Invalid bundle');
+                    var task = $.NSTask.alloc.init;
+                    task.launchPath = '/usr/bin/open'; task.arguments = $(['-n', bundle]);
+                    task.launch; task.waitUntilExit;
+                    if (task.terminationStatus !== 0) failed.push(bundle);
+                } catch (error) { failed.push(bundle); }
+            });
+            if (failed.length) throw new Error('Could not restart previous tilde: ' + failed.join(', '));
+            return;
+        }
         var apps = running();
+        var originals = apps.map(function(app) { return path(app.bundleURL); }).filter(function(bundle, i, all) { return all.indexOf(bundle) === i; });
+        // Publish recovery paths before any app can stop, including on a partial shutdown failure.
+        $.NSFileHandle.fileHandleWithStandardOutput.writeData($(JSON.stringify(originals)).dataUsingEncoding($.NSUTF8StringEncoding));
         apps.forEach(function(app) { app.terminate; });
         if (!wait(apps, 5)) {
             apps.filter(function(app) { return !app.isTerminated; }).forEach(function(app) { app.forceTerminate; });
             if (!wait(apps, 3)) throw new Error('tilde did not stop');
         }
         if (running().length) throw new Error('tilde restarted during shutdown');
-        return apps.length;
     }
     JXA
     }
-    running=$(stop)
+    originals=
+    recover() { lifecycle recover "$originals" "${1:-}" || true; }
+    if ! originals=$(lifecycle stop); then
+        [[ -z "$originals" ]] || recover
+        exit 1
+    fi
     restore() {
         if [[ -e "$previous" || -L "$previous" ]]; then
-            mv -- "$previous" "$target"
-            if [[ "$running" != 0 ]]; then open -n "$target" || true; fi
+            if ! mv -- "$previous" "$target"; then recover "$target"; return 1; fi
         fi
+        recover
     }
     if [[ -e "$target" || -L "$target" ]]; then
         if ! mv -- "$target" "$previous"; then
-            if [[ "$running" != 0 ]]; then open -n "$target" || true; fi
+            recover
             exit 1
         fi
     fi
     if ! mv -- "$stage/tilde.app" "$target"; then restore; exit 1; fi
     if ! open -n "$target"; then
         # A failed launch may still have started; stop it before restoring the old bundle.
-        stop >/dev/null
-        mv -- "$target" "$stage/failed.app"
+        if ! lifecycle stop >/dev/null; then recover "$target"; exit 1; fi
+        if ! mv -- "$target" "$stage/failed.app"; then recover "$target"; exit 1; fi
         restore
         exit 1
     fi
