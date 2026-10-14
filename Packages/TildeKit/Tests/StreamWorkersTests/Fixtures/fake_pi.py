@@ -87,6 +87,12 @@ while (command := read()) is not None:
         emit({"id": following.get("id"), "type": "response", "command": "prompt", "success": True,
               "data": {"disposition": script.split(" ", 1)[1]}})
         say("old run finished")
+    elif script == "hold-before-refuse":
+        say("old result")
+        following = read()
+        emit({"id": following.get("id"), "type": "response", "command": "prompt", "success": False,
+              "error": "Fixture refused the prompt"})
+        say("old run finished")
     elif script.startswith(("gate ", "write ")):
         verb, target = script.split(" ", 1)
         call = {"tool": "bash", "input": {"command": target}} if verb == "gate" else {"tool": "write", "input": {"path": target}}

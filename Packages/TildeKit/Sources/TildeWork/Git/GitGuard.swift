@@ -28,6 +28,7 @@ public struct GitGuard: Sendable, Equatable {
     let gitDirectory: String
     private var directory: Identity?
     private var hooksTarget: HookTarget?
+    private var hookFileTargets: [String: HookFileTarget] = [:]
     /// Code-running keys and their values, by config file (relative to `gitDirectory`).
     var configs: [String: [String: [String]]] = [:]
     /// Where `hooks` pointed, when it's a link rather than a directory of hooks.
@@ -71,6 +72,15 @@ public struct GitGuard: Sendable, Equatable {
                 snapshot.hooks = try hookEntries(in: hooks)
             case .file?: throw IOFailure()
             case nil: break
+            }
+            let hooksPath = snapshot.hooksTarget?.path ?? "\(path)/hooks"
+            for (name, entry) in snapshot.hooks {
+                guard case .link = entry else { continue }
+                let target = URL(fileURLWithPath: hooksPath).appending(path: name).resolvingSymlinksInPath()
+                let parent = try Directory(path: target.deletingLastPathComponent().path)
+                let file = try parent.regularFile(target.lastPathComponent)
+                snapshot.hookFileTargets[name] = HookFileTarget(
+                    path: target.path, parent: parent.identity, identity: file.identity, entry: file.entry)
             }
         } catch { snapshot.snapshotRefusals.append("hooks") }
         if !root.matches(path: path) { snapshot.snapshotRefusals.append("git directory") }
@@ -188,6 +198,20 @@ public struct GitGuard: Sendable, Equatable {
             else { try directory.remove(name) }
             restored.append("hooks/\(name)")
         }
+        for (name, target) in hookFileTargets.sorted(by: { $0.key < $1.key }) {
+            let path = URL(fileURLWithPath: target.path)
+            let parentPath = path.deletingLastPathComponent().path
+            let parent = try Directory(path: parentPath)
+            guard parent.identity == target.parent, try stillAnchored() else { throw IOFailure() }
+            let file = try parent.regularFile(path.lastPathComponent)
+            guard parent.matches(path: parentPath) else { throw IOFailure() }
+            guard file.entry != target.entry else { continue }
+            // A replaced target needs manual review. Only the snapshotted file may be repaired.
+            guard file.identity == target.identity, parent.matches(path: parentPath) else { throw IOFailure() }
+            try parent.put(target.entry, at: path.lastPathComponent)
+            guard parent.matches(path: parentPath), try parent.entry(path.lastPathComponent) == target.entry else { throw IOFailure() }
+            restored.append("hooks/\(name):target")
+        }
         guard try stillAnchored(), try Self.hookEntries(in: directory) == hooks else { throw IOFailure() }
         return restored
     }
@@ -210,6 +234,13 @@ public struct GitGuard: Sendable, Equatable {
     private struct HookTarget: Sendable, Equatable {
         let path: String
         let identity: Identity
+    }
+
+    private struct HookFileTarget: Sendable, Equatable {
+        let path: String
+        let parent: Identity
+        let identity: Identity
+        let entry: Entry
     }
 
     /// Each operation uses a descriptor, including parent traversal, reads, locks and renames.
@@ -264,13 +295,21 @@ public struct GitGuard: Sendable, Equatable {
                 return .link(String(decoding: buffer.prefix(count).map { UInt8(bitPattern: $0) }, as: UTF8.self))
             case S_IFDIR: return .directory
             case S_IFREG:
-                let file = openat(fd, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-                guard file >= 0 else { throw IOFailure() }
-                let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
-                guard fstat(file, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw IOFailure() }
-                return .file(try handle.readToEnd() ?? Data(), mode: info.st_mode & 0o7777)
+                return try regularFile(name).entry
             default: throw IOFailure()
             }
+        }
+
+        func regularFile(_ name: String) throws -> (entry: Entry, identity: Identity) {
+            let file = openat(fd, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            guard file >= 0 else { throw IOFailure() }
+            let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
+            defer { try? handle.close() }
+            var info = stat()
+            guard fstat(file, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw IOFailure() }
+            let data = try handle.readToEnd() ?? Data()
+            guard matchesFile(name, descriptor: file) else { throw IOFailure() }
+            return (.file(data, mode: info.st_mode & 0o7777), Identity(info))
         }
 
         func names() throws -> [String] {

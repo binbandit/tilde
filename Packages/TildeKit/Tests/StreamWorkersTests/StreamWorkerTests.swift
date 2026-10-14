@@ -234,6 +234,21 @@ import WorkerKit
         await pi.stop()
     }
 
+    @Test func aRejectedPiSteerCannotInheritTheRunningTurnsSuccess() async throws {
+        let pi = worker(PiDialect(), fake: "fake_pi.py", sessionID: "s-rejected-steer")
+        let log = StreamEvents(pi)
+        let first = UUID(), rejected = UUID()
+        try await pi.start(brief: "hold-before-refuse", submission: first)
+        _ = try await log.next { if case .message(let text) = $0 { text } else { nil } }
+        try await pi.steer("rejected instruction", submission: rejected)
+        #expect(try await log.next(StreamPick.turn) == StreamTurn(ok: false, text: "Fixture refused the prompt"))
+        await pi.stop()
+        _ = try await log.next(StreamPick.exit)
+        #expect(await submissionOrder(log.all) == [
+            "submitted \(first)", "submitted \(rejected)", "turn false Fixture refused the prompt"
+        ])
+    }
+
     @Test func piWritesAreJudgedFromTheWorktree() async throws {
         let pi = worker(PiDialect(), fake: "fake_pi.py", sessionID: "s-3")
         let log = StreamEvents(pi)

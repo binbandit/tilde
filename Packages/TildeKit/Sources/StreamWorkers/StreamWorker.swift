@@ -179,10 +179,16 @@ public actor StreamWorker: Worker {
             case (true, "queued"):
                 // Folded into the running turn, whose end answers for it.
                 busy = true
+            case (false, _):
+                let problem = error ?? "\(dialect.label) refused the prompt."
+                // The running turn still ends once, but cannot sign off an instruction it rejected.
+                if busy {
+                    failure = problem
+                    emit.yield(.notice(problem))
+                } else { emit.yield(.turnEnded(ok: false, text: problem)) }
             default:
                 let problem =
-                    if !accepted { error ?? "\(dialect.label) refused the prompt." }
-                    else if disposition == "handled" { "\(dialect.label) handled the prompt without a model turn." }
+                    if disposition == "handled" { "\(dialect.label) handled the prompt without a model turn." }
                     else { "\(dialect.label) didn't confirm a model turn for the prompt (\(disposition ?? "no disposition"))." }
                 // A running turn still ends on its own, and answers for this prompt too. Otherwise nothing
                 // else will end this one.

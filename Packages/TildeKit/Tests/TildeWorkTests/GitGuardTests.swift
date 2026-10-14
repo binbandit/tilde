@@ -104,6 +104,8 @@ import TildeSupport
 
     @Test func linkedHooksAreGuardedAsLinks() async throws {
         // A common setup: `ln -s ../../scripts/pre-commit .git/hooks/`.
+        try FileManager.default.createDirectory(atPath: "\(repo)/scripts", withIntermediateDirectories: true)
+        try write("#!/bin/sh\nexit 0\n", to: "\(repo)/scripts/pre-commit", mode: 0o755)
         try FileManager.default.createSymbolicLink(atPath: "\(hooks)/pre-commit", withDestinationPath: "../../scripts/pre-commit")
         let guarded = await GitGuard.snapshot(repository: repo)
         #expect(guarded.snapshotRefusals.isEmpty)
@@ -204,5 +206,45 @@ import TildeSupport
 
         #expect(await guarded.restore().refused == ["hooks"])
         #expect(try read("\(outside)/pre-push") == "outside")
+    }
+
+    @Test func aLeafHookLinkGuardsTheExecutableFileItRuns() async throws {
+        let target = "\(git)/real-hook", original = "#!/bin/sh\nexit 0\n"
+        try write(original, to: target, mode: 0o755)
+        try FileManager.default.createSymbolicLink(atPath: "\(hooks)/pre-commit", withDestinationPath: "../real-hook")
+        let guarded = await GitGuard.snapshot(repository: repo)
+        #expect(guarded.snapshotRefusals.isEmpty)
+        let marker = "\(root)/executed"
+        try write("#!/bin/sh\nprintf worker > \(Shell.quote(marker))\n", to: target, mode: 0o700)
+
+        #expect(await guarded.restore() == GitGuard.Restoration(restored: ["hooks/pre-commit:target"]))
+        #expect(link("\(hooks)/pre-commit") == "../real-hook")
+        #expect(try read(target) == original)
+        #expect(try mode(target) == 0o755)
+        #expect(await guarded.restore() == GitGuard.Restoration())
+        try await run("commit", "-q", "--allow-empty", "-m", "owner commit")
+        #expect(!FileManager.default.fileExists(atPath: marker))
+    }
+
+    @Test(arguments: [true, false]) func aSubstitutedLeafHookTargetIsRefused(withALink: Bool) async throws {
+        let target = "\(git)/real-hook", original = "#!/bin/sh\nexit 0\n"
+        try write(original, to: target, mode: 0o755)
+        try FileManager.default.createSymbolicLink(atPath: "\(hooks)/pre-commit", withDestinationPath: "../real-hook")
+        let guarded = await GitGuard.snapshot(repository: repo)
+        try FileManager.default.moveItem(atPath: target, toPath: "\(git)/original-real-hook")
+        let changed = "#!/bin/sh\necho changed\n"
+        if withALink {
+            try write(changed, to: "\(outside)/real-hook", mode: 0o755)
+            try FileManager.default.createSymbolicLink(atPath: target, withDestinationPath: "\(outside)/real-hook")
+        } else { try write(changed, to: target, mode: 0o755) }
+
+        #expect(await guarded.restore().refused == ["hooks"])
+        #expect(try read(target) == changed)
+        #expect(try read("\(git)/original-real-hook") == original)
+    }
+
+    @Test func anUnreadableLeafHookTargetCannotBeAcceptedAsGuarded() async throws {
+        try FileManager.default.createSymbolicLink(atPath: "\(hooks)/pre-commit", withDestinationPath: "../missing-hook")
+        #expect(await GitGuard.snapshot(repository: repo).snapshotRefusals == ["hooks"])
     }
 }
