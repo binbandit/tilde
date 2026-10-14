@@ -73,7 +73,7 @@ extension Conductor {
         if job.isolation != .scratch {
             guard let base = job.baseCommit else { return .error("The job's change baseline is unknown.") }
             do {
-                diff = try await Git.checkedDiffStat(workdir: job.workdir, base: base)
+                diff = try await Git.diffStat(workdir: job.workdir, base: base)
             } catch {
                 return .error("Couldn't verify the job's changes: \(error)")
             }

@@ -39,7 +39,7 @@ import WorkerKit
         try await git("commit", "-qm", "Add nav", cwd: job.workdir)
         try "more\n".write(toFile: "\(job.workdir)/Untracked.swift", atomically: true, encoding: .utf8)
 
-        let stat = await Git.diffStat(workdir: job.workdir, base: job.baseCommit!)
+        let stat = try await Git.diffStat(workdir: job.workdir, base: job.baseCommit!)
         #expect(stat.files == 2)
         #expect(stat.insertions == 2)
 

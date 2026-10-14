@@ -23,7 +23,7 @@ extension Conductor {
         let stopped = await stopWorker(jobID)
         try requireGitIntegrity(jobID)
         guard workerGenerations[jobID] == stopped, expectedSubmissions[jobID] == nil else { throw DeliveryInterrupted() }
-        guard try await !Git.checkedDiffStat(workdir: job.workdir, base: base).isEmpty else {
+        guard try await !Git.diffStat(workdir: job.workdir, base: base).isEmpty else {
             update(jobID) { $0.diff = DiffStat(files: 0, insertions: 0, deletions: 0); $0.ticker = "Complete" }
             throw Git.LandFailure(description: "There are no changes to bring in. Mark the job Done instead.")
         }
@@ -88,7 +88,7 @@ extension Conductor {
         if job.isolation == .worktree {
             do {
                 guard let base = job.baseCommit else { return }
-                let diff = try await Git.checkedDiffStat(workdir: job.workdir, base: base)
+                let diff = try await Git.diffStat(workdir: job.workdir, base: base)
                 guard diff.isEmpty else {
                     update(jobID) { $0.diff = diff; $0.ticker = "Ready for review" }
                     emit(.trouble("\(job.title) now has changes to review."))
