@@ -30,6 +30,10 @@ targets:
         type: syncedFolder
     dependencies:
       - package: TildeKit
+    postBuildScripts:
+      - name: Embed retired terminal hook compatibility
+        script: 'bash "$SRCROOT/scripts/build-terminal-hook-compat.sh"'
+        basedOnDependencyAnalysis: false
     entitlements:
       path: Tilde/Tilde.entitlements
       properties:

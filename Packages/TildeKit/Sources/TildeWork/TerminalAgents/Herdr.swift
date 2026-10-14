@@ -85,22 +85,33 @@ public enum Herdr {
     /// at `cwd`, as the agent herdr knows as `name`; when that agent is already running it's brought
     /// forward instead. Waits for the server first, in case a client was just opened to start it.
     public static func resume(_ command: String, in cwd: String, label: String, name: String) async throws {
+        try await resume(command, in: cwd, label: label, name: name, environment: UserEnvironment.shared.variables)
+    }
+
+    static func resume(_ command: String, in cwd: String, label: String, name: String, environment: [String: String]) async throws {
         // Resume commands are tilde's own (`claude --resume <id>`): a program and plain words.
         let words = command.split(separator: " ").map(String.init)
         guard let program = words.first else { return }
-        try await waitForServer()
-        if try await run(["agent", "focus", name]).ok { return }
-        let workspace = try await check(["workspace", "create", "--cwd", cwd, "--label", label, "--focus"])
+        try await waitForServer(environment: environment)
+        if try await run(["agent", "focus", name], environment: environment).ok { return }
+        let workspace = try await check(["workspace", "create", "--cwd", cwd, "--label", label, "--focus"], environment: environment)
         let pane = try decoder.decode(Response<WorkspaceCreated>.self, from: Data(workspace.utf8)).result.rootPane.paneId
-        let started = try await run(["agent", "start", name, "--kind", program, "--pane", pane, "--"] + words.dropFirst(), timeout: .seconds(45))
+        let started = try await run(["agent", "start", name, "--kind", program, "--pane", pane, "--"] + words.dropFirst(),
+                                    timeout: .seconds(45), environment: environment)
         // herdr turns down an agent kind it doesn't know before running anything (exit 2), so then it's a plain
-        // command. Anything else means it's in the pane: ready, or at a startup prompt the owner will see there.
-        if started.status == 2 { try await check(["pane", "run", pane, command]) }
+        // command. Other errors can happen before launch or leave a live agent at a startup prompt.
+        if started.status == 2, !started.timedOut {
+            try await check(["pane", "run", pane, command], environment: environment)
+        } else if !started.ok {
+            // Keep a live session in its pane instead of resuming it twice through the terminal fallback.
+            let focused = try? await run(["agent", "focus", name], environment: environment)
+            guard focused?.ok == true else { throw refusal(started) }
+        }
     }
 
-    private static func waitForServer() async throws {
+    private static func waitForServer(environment: [String: String]) async throws {
         for _ in 0..<60 {
-            if let status = try? await run(["status", "server", "--json"]),
+            if let status = try? await run(["status", "server", "--json"], environment: environment),
                 (try? decoder.decode(ServerStatus.self, from: Data(status.stdout.utf8)))?.running == true
             { return }
             try await Task.sleep(for: .milliseconds(250))
@@ -111,18 +122,21 @@ public enum Herdr {
     // MARK: The CLI
 
     @discardableResult
-    private static func run(_ arguments: [String], timeout: Duration = .seconds(10)) async throws -> Shell.Output {
-        try await Shell.run(["herdr"] + arguments, timeout: timeout)
+    private static func run(_ arguments: [String], timeout: Duration = .seconds(10),
+                            environment: [String: String] = UserEnvironment.shared.variables) async throws -> Shell.Output {
+        try await Shell.run(["herdr"] + arguments, environment: environment, timeout: timeout)
     }
 
     /// Runs a command that has to work, returning what it printed.
     @discardableResult
-    private static func check(_ arguments: [String]) async throws -> String {
-        let output = try await run(arguments)
-        guard output.ok else {
-            throw Failure.refused((output.stderr.isEmpty ? output.stdout : output.stderr).trimmingCharacters(in: .whitespacesAndNewlines))
-        }
+    private static func check(_ arguments: [String], environment: [String: String] = UserEnvironment.shared.variables) async throws -> String {
+        let output = try await run(arguments, environment: environment)
+        guard output.ok else { throw refusal(output) }
         return output.stdout
+    }
+
+    private static func refusal(_ output: Shell.Output) -> Failure {
+        Failure.refused((output.stderr.isEmpty ? output.stdout : output.stderr).trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private static var decoder: JSONDecoder {
