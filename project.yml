@@ -63,3 +63,27 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.tilde.app
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: NO
+
+  # The app's pure logic, compiled straight from Tilde/ with no app host, so nothing launches.
+  TildeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - TildeTests
+      # Only the files under test, grouped under TildeTests so Xcode shows one Tilde folder.
+      - { path: Tilde/Inlet/Inlet.swift, group: TildeTests/Tilde }
+      - { path: Tilde/Inlet/InletGeometry.swift, group: TildeTests/Tilde }
+      - { path: Tilde/Inlet/InletMinimization.swift, group: TildeTests/Tilde }
+      - { path: Tilde/Inlet/InletPlacement.swift, group: TildeTests/Tilde }
+      - { path: Tilde/Inlet/InletPreferences.swift, group: TildeTests/Tilde }
+      - { path: Tilde/Inlet/InletShape.swift, group: TildeTests/Tilde }
+      - { path: Tilde/Inlet/Conversation/ConversationVisibility.swift, group: TildeTests/Tilde }
+      - { path: Tilde/Perception/ContextCapture.swift, group: TildeTests/Tilde }
+      - { path: Tilde/Perception/Coordinates.swift, group: TildeTests/Tilde }
+      - { path: Tilde/Perception/Referent.swift, group: TildeTests/Tilde }
+      - { path: Tilde/Perception/Shells.swift, group: TildeTests/Tilde }
+    dependencies:
+      - package: TildeKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
