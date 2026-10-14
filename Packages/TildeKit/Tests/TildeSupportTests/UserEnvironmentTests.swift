@@ -44,4 +44,36 @@ import Testing
         #expect(UserEnvironment.login(shell: fake, timeout: 0.3) == nil)
         #expect(Date().timeIntervalSince(started) < 3)
     }
+
+    @Test func captureIsPrivateBeforeTheShellWritesIt() throws {
+        let fake = try shell("""
+            capture=$(printf '%s' "$2" | /usr/bin/cut -d "'" -f 2)
+            export TILDE_TEST_FILE_MODE=$(/usr/bin/stat -f %Lp "$capture")
+            export TILDE_TEST_DIR_MODE=$(/usr/bin/stat -f %Lp "$(/usr/bin/dirname "$capture")")
+            """)
+        defer { try? FileManager.default.removeItem(atPath: fake) }
+        let env = try #require(UserEnvironment.login(shell: fake))
+        #expect(env["TILDE_TEST_FILE_MODE"] == "600")
+        #expect(env["TILDE_TEST_DIR_MODE"] == "700")
+    }
+
+    @Test func timedOutShellCannotRecreateItsCredentialCapture() throws {
+        let record = FileManager.default.temporaryDirectory.appending(path: "tilde-timeout-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: record) }
+        let fake = try shell("""
+            printf '%s\\n%s' "$$" "$2" > '\(record.path)'
+            trap '' TERM
+            sleep 1
+            export TILDE_TEST_KEY=synthetic-secret
+            """)
+        defer { try? FileManager.default.removeItem(atPath: fake) }
+        #expect(UserEnvironment.login(shell: fake, timeout: 0.1) == nil)
+        let lines = try String(contentsOf: record, encoding: .utf8).split(separator: "\n", maxSplits: 1)
+        let pid = try #require(Int32(lines[0]))
+        #expect(kill(pid, 0) == -1)
+        let command = String(lines[1])
+        let path = try #require(command.split(separator: "'").dropFirst().first)
+        #expect(!FileManager.default.fileExists(atPath: String(path)))
+        #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: String(path)).deletingLastPathComponent().path))
+    }
 }

@@ -43,8 +43,13 @@ public final class UserEnvironment: Sendable {
     /// file rather than a pipe: whatever the config prints can't garble it, and a background
     /// process the config leaves holding stdout can't keep us waiting.
     static func login(shell: String, timeout: TimeInterval = 10) -> [String: String]? {
-        let file = FileManager.default.temporaryDirectory.appending(path: "tilde-env-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: file) }
+        let directory = FileManager.default.temporaryDirectory.appending(path: "tilde-env-\(UUID().uuidString)")
+        guard (try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700])) != nil else { return nil }
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appending(path: "environment")
+        guard FileManager.default.createFile(atPath: file.path, contents: nil,
+            attributes: [.posixPermissions: 0o600]) else { return nil }
         let command = "/usr/bin/env -0 > '\(file.path)'"
         for flags in [["-i", "-l"], ["-l"]] {
             let process = Process()
@@ -58,6 +63,10 @@ public final class UserEnvironment: Sendable {
             while process.isRunning, Date() < deadline { usleep(20_000) }
             if process.isRunning {
                 process.terminate()
+                let grace = Date().addingTimeInterval(0.2)
+                while process.isRunning, Date() < grace { usleep(10_000) }
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                process.waitUntilExit()
                 return nil
             }
             // NUL-separated, so values with newlines in them survive.
