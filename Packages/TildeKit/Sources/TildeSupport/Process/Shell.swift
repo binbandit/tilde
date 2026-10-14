@@ -16,6 +16,10 @@ public enum Shell {
     public struct Failed: Error, CustomStringConvertible {
         public var command: [String]
         public var output: Output
+        public init(command: [String], output: Output) {
+            self.command = command
+            self.output = output
+        }
         public var description: String {
             let detail = output.stderr.isEmpty ? output.stdout : output.stderr
             return "`\(command.joined(separator: " "))` failed (\(output.status)): \(detail.trimmingCharacters(in: .whitespacesAndNewlines))"

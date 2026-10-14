@@ -149,4 +149,60 @@ import TildeSupport
         #expect(await guarded.restore().refused == ["config"])
         #expect(try read("\(outside)/config") == "[core]\n\tfsmonitor = ./monitor\n")
     }
+
+    @Test func aLinkedWorktreeParentSwappedForALinkCannotRedirectConfigRestoration() async throws {
+        try await run("config", "extensions.worktreeConfig", "true")
+        try await run("worktree", "add", "-q", "-b", "job", "\(root)/job")
+        let guarded = await GitGuard.snapshot(repository: repo)
+        #expect(guarded.snapshotRefusals.isEmpty)
+        let text = "[core]\n\tfsmonitor = outside-owner-value\n"
+        try write(text, to: "\(outside)/config.worktree")
+        let parent = "\(git)/worktrees/job"
+        try FileManager.default.moveItem(atPath: parent, toPath: "\(git)/worktrees/saved-job")
+        try FileManager.default.createSymbolicLink(atPath: parent, withDestinationPath: outside)
+
+        #expect(await guarded.restore().refused == ["worktrees/job/config.worktree"])
+        #expect(try read("\(outside)/config.worktree") == text)
+        #expect(!FileManager.default.fileExists(atPath: "\(outside)/config.worktree.lock"))
+    }
+
+    @Test func aReplacedCommonDirectoryCannotRedirectRestoration() async throws {
+        let guarded = await GitGuard.snapshot(repository: repo)
+        let text = "[core]\n\tfsmonitor = outside-owner-value\n"
+        try write(text, to: "\(outside)/config")
+        try FileManager.default.moveItem(atPath: git, toPath: "\(repo)/original-git")
+        try FileManager.default.createSymbolicLink(atPath: git, withDestinationPath: outside)
+
+        #expect(await guarded.restore().refused == ["git directory"])
+        #expect(try read("\(outside)/config") == text)
+    }
+
+    @Test func aLinkedHooksDirectoryGuardsItsExecutableContents() async throws {
+        let target = "\(git)/real-hooks"
+        try FileManager.default.moveItem(atPath: hooks, toPath: target)
+        try FileManager.default.createSymbolicLink(atPath: hooks, withDestinationPath: "real-hooks")
+        let guarded = await GitGuard.snapshot(repository: repo)
+        #expect(guarded.snapshotRefusals.isEmpty)
+        try write("#!/bin/sh\necho changed\n", to: "\(target)/pre-push", mode: 0o700)
+        try write("#!/bin/sh\necho added\n", to: "\(target)/pre-commit", mode: 0o755)
+
+        #expect(await guarded.restore() == GitGuard.Restoration(restored: ["hooks/pre-commit", "hooks/pre-push"]))
+        #expect(link(hooks) == "real-hooks")
+        #expect(try read("\(target)/pre-push") == "#!/bin/sh\nexit 0\n")
+        #expect(try mode("\(target)/pre-push") == 0o755)
+        #expect(!FileManager.default.fileExists(atPath: "\(target)/pre-commit"))
+    }
+
+    @Test func aLinkedHooksTargetSubstitutionIsRefusedWithoutWritingOutside() async throws {
+        let target = "\(git)/real-hooks"
+        try FileManager.default.moveItem(atPath: hooks, toPath: target)
+        try FileManager.default.createSymbolicLink(atPath: hooks, withDestinationPath: "real-hooks")
+        let guarded = await GitGuard.snapshot(repository: repo)
+        try write("outside", to: "\(outside)/pre-push")
+        try FileManager.default.moveItem(atPath: target, toPath: "\(git)/original-real-hooks")
+        try FileManager.default.createSymbolicLink(atPath: target, withDestinationPath: outside)
+
+        #expect(await guarded.restore().refused == ["hooks"])
+        #expect(try read("\(outside)/pre-push") == "outside")
+    }
 }

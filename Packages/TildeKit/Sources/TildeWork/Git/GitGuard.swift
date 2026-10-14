@@ -9,8 +9,8 @@ import TildeSupport
 /// upstream, a new remote) is left alone.
 ///
 /// Config is only parsed and edited as a private copy with `git config --file`, which runs none of it, and
-/// written back under git's own `config.lock`. Everything is read with `lstat` and put back by renaming a
-/// fresh copy into place, so a link planted where a file was is replaced, never written through.
+/// written back under git's own `config.lock`. Access stays relative to verified directory descriptors,
+/// so a substituted parent cannot redirect a repair. Links are replaced, never written through.
 public struct GitGuard: Sendable, Equatable {
     enum Entry: Sendable, Equatable {
         case file(Data, mode: mode_t)
@@ -26,6 +26,8 @@ public struct GitGuard: Sendable, Equatable {
 
     /// The git directory all the repo's worktrees share.
     let gitDirectory: String
+    private var directory: Identity?
+    private var hooksTarget: HookTarget?
     /// Code-running keys and their values, by config file (relative to `gitDirectory`).
     var configs: [String: [String: [String]]] = [:]
     /// Where `hooks` pointed, when it's a link rather than a directory of hooks.
@@ -44,163 +46,287 @@ public struct GitGuard: Sendable, Equatable {
             return GitGuard(gitDirectory: repository, snapshotRefusals: ["git directory"])
         }
         var snapshot = GitGuard(gitDirectory: path)
+        guard let root = try? Directory(path: path) else {
+            snapshot.snapshotRefusals = ["git directory"]
+            return snapshot
+        }
+        snapshot.directory = root.identity
         do {
-            let config = try await codeKeys(snapshot.config("config")?.data ?? Data())
+            let config = try await codeKeys(Self.config("config", in: root)?.data ?? Data())
             snapshot.configs["config"] = config
-            for file in snapshot.worktreeConfigs(config) {
-                snapshot.configs[file] = try await codeKeys(snapshot.config(file)?.data ?? Data())
+            for file in try snapshot.worktreeConfigs(config, in: root) {
+                snapshot.configs[file] = try await codeKeys(Self.config(file, in: root)?.data ?? Data())
             }
         } catch { snapshot.snapshotRefusals.append("config") }
         do {
-            switch try entry(at: "\(path)/hooks") {
-            case .link(let target)?: snapshot.hooksLink = target
-            case .directory?: snapshot.hooks = try snapshot.hookEntries()
+            switch try root.entry("hooks") {
+            case .link(let target)?:
+                snapshot.hooksLink = target
+                let path = URL(fileURLWithPath: path).appending(path: "hooks").resolvingSymlinksInPath().path
+                let hooks = try Directory(path: path)
+                snapshot.hooksTarget = HookTarget(path: path, identity: hooks.identity)
+                snapshot.hooks = try hookEntries(in: hooks)
+            case .directory?:
+                guard let hooks = try root.child("hooks") else { throw IOFailure() }
+                snapshot.hooks = try hookEntries(in: hooks)
             case .file?: throw IOFailure()
             case nil: break
             }
         } catch { snapshot.snapshotRefusals.append("hooks") }
+        if !root.matches(path: path) { snapshot.snapshotRefusals.append("git directory") }
         return snapshot
     }
 
     /// Puts back what changed since the snapshot and says what that was.
     public func restore() async -> Restoration {
         guard snapshotRefusals.isEmpty else { return Restoration(refused: snapshotRefusals) }
+        guard let root = try? Directory(path: gitDirectory), root.identity == directory else {
+            return Restoration(refused: ["git directory"])
+        }
         var result = Restoration()
         for (file, before) in configs.sorted(by: { $0.key < $1.key }) {
-            do { result.restored += try await restoreConfig(file, to: before).map { file == "config" ? $0 : "\(file):\($0)" } }
+            do { result.restored += try await restoreConfig(file, to: before, in: root).map { file == "config" ? $0 : "\(file):\($0)" } }
             catch { result.refused.append(file) }
         }
-        do { result.restored += try restoreHooks() } catch { result.refused.append("hooks") }
+        do { result.restored += try restoreHooks(in: root) } catch { result.refused.append("hooks") }
+        if !root.matches(path: gitDirectory) { result.refused.append("git directory") }
         return result
     }
 
     /// With `extensions.worktreeConfig` on in `config`, git also reads each worktree's own `config.worktree`:
     /// the main worktree's beside `config`, a linked one's (a job's) under `worktrees/<name>`.
-    private func worktreeConfigs(_ config: [String: [String]]) -> [String] {
+    private func worktreeConfigs(_ config: [String: [String]], in root: Directory) throws -> [String] {
         // Over-guarding is harmless, so anything but an explicit false counts as on.
         guard let value = config["extensions.worktreeconfig"]?.last, !["false", "no", "off", "0"].contains(value.lowercased()) else {
             return []
         }
-        let linked = (try? FileManager.default.contentsOfDirectory(atPath: "\(gitDirectory)/worktrees")) ?? []
+        let linked = try root.child("worktrees")?.names() ?? []
         return ["config.worktree"] + linked.map { "worktrees/\($0)/config.worktree" }
     }
 
-    /// A config file's contents and mode: empty when there's none, nil when its folder is gone too (a linked
-    /// worktree removed). Git would follow a link here, and only the code-running keys are known, so anything
-    /// but a regular file can't be guarded or rebuilt.
-    private func config(_ file: String) throws -> (data: Data, mode: mode_t)? {
-        let path = "\(gitDirectory)/\(file)"
-        switch try Self.entry(at: path) {
+    /// A missing linked worktree has no config to repair. Every existing parent must be a real directory.
+    private static func config(_ file: String, in root: Directory) throws -> (data: Data, mode: mode_t)? {
+        guard let parent = try root.parent(of: file) else { return nil }
+        return try configEntry((file as NSString).lastPathComponent, in: parent)
+    }
+
+    private static func configEntry(_ name: String, in parent: Directory) throws -> (data: Data, mode: mode_t) {
+        switch try parent.entry(name) {
         case .file(let data, let mode)?: return (data, mode)
-        case nil: return FileManager.default.fileExists(atPath: (path as NSString).deletingLastPathComponent) ? (Data(), 0o644) : nil
+        case nil: return (Data(), 0o644)
         default: throw IOFailure()
         }
     }
 
     /// Reverts `file`'s code-running keys under git's lock, so a concurrent `git config` (or another job's
-    /// guard) can't lose a write. Returns the keys that had changed.
-    private func restoreConfig(_ file: String, to before: [String: [String]]) async throws -> [String] {
-        guard let unlocked = try config(file), try await Self.codeKeys(unlocked.data) != before else { return [] }
-        let path = "\(gitDirectory)/\(file)", lock = path + ".lock"
-        let locked = try await Self.lock(lock)
+    /// guard) can't lose a write. The lock and replacement stay in the same anchored directory.
+    private func restoreConfig(_ file: String, to before: [String: [String]], in root: Directory) async throws -> [String] {
+        guard let parent = try root.parent(of: file) else { return [] }
+        let name = (file as NSString).lastPathComponent
+        let unlocked = try Self.configEntry(name, in: parent)
+        let keys = try await Self.codeKeys(unlocked.data)
+        guard root.matches(path: gitDirectory), try root.parent(of: file)?.identity == parent.identity else { throw IOFailure() }
+        guard keys != before else { return [] }
+        let lock = name + ".lock"
+        let locked = try await Self.lock(lock, in: parent)
         var committed = false
         defer {
             close(locked)
-            if !committed { unlink(lock) }
+            if !committed { _ = unlinkat(parent.fd, lock, 0) }
         }
-        guard let current = try config(file) else { return [] }
+        let current = try Self.configEntry(name, in: parent)
         let (replacement, changed) = try await Self.reverted(current.data, to: before)
+        guard root.matches(path: gitDirectory), try root.parent(of: file)?.identity == parent.identity else { throw IOFailure() }
         guard !changed.isEmpty else { return [] }
         guard fchmod(locked, current.mode) == 0 else { throw IOFailure() }
         try FileHandle(fileDescriptor: locked).write(contentsOf: replacement)
-        guard rename(lock, path) == 0 else { throw IOFailure() }
+        guard parent.matchesFile(lock, descriptor: locked), renameat(parent.fd, lock, parent.fd, name) == 0 else { throw IOFailure() }
         committed = true
+        guard root.matches(path: gitDirectory), try root.parent(of: file)?.identity == parent.identity,
+            try await Self.codeKeys(Self.configEntry(name, in: parent).data) == before else { throw IOFailure() }
         return changed
     }
 
-    private func restoreHooks() throws -> [String] {
-        let path = "\(gitDirectory)/hooks"
-        let current = try Self.entry(at: path)
-        if let hooksLink {
-            guard current != .link(hooksLink) else { return [] }
-            try Self.put(.link(hooksLink), at: path)
-            return ["hooks"]
-        }
+    private func restoreHooks(in root: Directory) throws -> [String] {
+        let current = try root.entry("hooks")
+        let directory: Directory
         var restored: [String] = []
-        switch current {
-        case .directory?: break
-        case nil where hooks.isEmpty: return []
-        default:
-            // A link or file in its place goes (unlinking never follows a link) and a fresh directory takes it.
-            if current != nil, unlink(path) != 0 { throw IOFailure() }
-            guard mkdir(path, 0o755) == 0 else { throw IOFailure() }
-            restored.append("hooks")
-        }
-        let now = try hookEntries()
-        for name in Set(now.keys).union(hooks.keys).sorted() where now[name] != hooks[name] {
-            if let hook = hooks[name] {
-                try Self.put(hook, at: "\(path)/\(name)")
-            } else if unlink("\(path)/\(name)") != 0 {
-                throw IOFailure()
+        if let hooksLink {
+            // The original link's target is trusted only while the snapshotted directory is still there.
+            // Restoring its contents must never follow a replacement target or parent into another folder.
+            guard let target = hooksTarget else { throw IOFailure() }
+            directory = try Directory(path: target.path)
+            guard directory.identity == target.identity else { throw IOFailure() }
+            if current != .link(hooksLink) {
+                try root.put(.link(hooksLink), at: "hooks")
+                restored.append("hooks")
             }
+        } else {
+            switch current {
+            case .directory?: break
+            case nil where hooks.isEmpty: return []
+            default:
+                if current != nil { try root.remove("hooks") }
+                guard mkdirat(root.fd, "hooks", 0o755) == 0 else { throw IOFailure() }
+                restored.append("hooks")
+            }
+            guard let hooks = try root.child("hooks") else { throw IOFailure() }
+            directory = hooks
+        }
+        func stillAnchored() throws -> Bool {
+            guard root.matches(path: gitDirectory) else { return false }
+            if let target = hooksTarget, let link = hooksLink {
+                guard directory.matches(path: target.path) else { return false }
+                return try root.entry("hooks") == .link(link)
+            }
+            return try root.child("hooks")?.identity == directory.identity
+        }
+        let now = try Self.hookEntries(in: directory)
+        for name in Set(now.keys).union(hooks.keys).sorted() where now[name] != hooks[name] {
+            guard try stillAnchored() else { throw IOFailure() }
+            if let hook = hooks[name] { try directory.put(hook, at: name) }
+            else { try directory.remove(name) }
             restored.append("hooks/\(name)")
         }
+        guard try stillAnchored(), try Self.hookEntries(in: directory) == hooks else { throw IOFailure() }
         return restored
     }
 
     /// The files and links in `hooks`. Git never runs a directory as a hook.
-    private func hookEntries() throws -> [String: Entry] {
-        let path = "\(gitDirectory)/hooks"
+    private static func hookEntries(in directory: Directory) throws -> [String: Entry] {
         var entries: [String: Entry] = [:]
-        for name in try FileManager.default.contentsOfDirectory(atPath: path) {
-            if let entry = try Self.entry(at: "\(path)/\(name)"), entry != .directory { entries[name] = entry }
+        for name in try directory.names() {
+            if let entry = try directory.entry(name), entry != .directory { entries[name] = entry }
         }
         return entries
     }
 
-    /// What's at `path`, without following a link there; nil when nothing is.
-    private static func entry(at path: String) throws -> Entry? {
-        var info = stat()
-        guard lstat(path, &info) == 0 else {
-            if errno == ENOENT { return nil }
-            throw IOFailure()
-        }
-        switch info.st_mode & S_IFMT {
-        case S_IFLNK: return .link(try FileManager.default.destinationOfSymbolicLink(atPath: path))
-        case S_IFDIR: return .directory
-        case S_IFREG:
-            guard let data = FileManager.default.contents(atPath: path) else { throw IOFailure() }
-            return .file(data, mode: info.st_mode & 0o7777)
-        default: throw IOFailure()
-        }
+    private struct Identity: Sendable, Equatable {
+        let device: dev_t
+        let inode: ino_t
+        init(_ info: stat) { device = info.st_dev; inode = info.st_ino }
     }
 
-    /// Renames a fresh copy of `entry` over `path`, which replaces a link there rather than following it.
-    private static func put(_ entry: Entry, at path: String) throws {
-        let temporary = "\((path as NSString).deletingLastPathComponent)/.tilde-\(UUID().uuidString)"
-        do {
-            switch entry {
-            case .file(let data, let mode):
-                try data.write(to: URL(fileURLWithPath: temporary), options: .withoutOverwriting)
-                try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: temporary)
-            case .link(let target):
-                try FileManager.default.createSymbolicLink(atPath: temporary, withDestinationPath: target)
-            case .directory:
+    private struct HookTarget: Sendable, Equatable {
+        let path: String
+        let identity: Identity
+    }
+
+    /// Each operation uses a descriptor, including parent traversal, reads, locks and renames.
+    private final class Directory: Sendable {
+        let fd: Int32
+        let identity: Identity
+
+        convenience init(path: String) throws {
+            let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            guard fd >= 0 else { throw IOFailure() }
+            do { try self.init(fd: fd) } catch { close(fd); throw error }
+        }
+
+        private init(fd: Int32) throws {
+            var info = stat()
+            guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { throw IOFailure() }
+            self.fd = fd
+            identity = Identity(info)
+        }
+
+        deinit { close(fd) }
+
+        func matches(path: String) -> Bool { (try? Directory(path: path))?.identity == identity }
+
+        func child(_ name: String) throws -> Directory? {
+            let child = openat(fd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            if child < 0, errno == ENOENT { return nil }
+            guard child >= 0 else { throw IOFailure() }
+            do { return try Directory(fd: child) } catch { close(child); throw error }
+        }
+
+        func parent(of file: String) throws -> Directory? {
+            var parent = self
+            for component in file.split(separator: "/").dropLast() {
+                guard component != ".", component != "..", let next = try parent.child(String(component)) else { return nil }
+                parent = next
+            }
+            return parent
+        }
+
+        func entry(_ name: String) throws -> Entry? {
+            var info = stat()
+            guard fstatat(fd, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
+                if errno == ENOENT { return nil }
                 throw IOFailure()
             }
-            guard rename(temporary, path) == 0 else { throw IOFailure() }
-        } catch {
-            unlink(temporary)
-            throw error
+            switch info.st_mode & S_IFMT {
+            case S_IFLNK:
+                var buffer = [CChar](repeating: 0, count: Int(info.st_size) + 1)
+                let count = readlinkat(fd, name, &buffer, buffer.count)
+                guard count >= 0, count < buffer.count else { throw IOFailure() }
+                return .link(String(decoding: buffer.prefix(count).map { UInt8(bitPattern: $0) }, as: UTF8.self))
+            case S_IFDIR: return .directory
+            case S_IFREG:
+                let file = openat(fd, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+                guard file >= 0 else { throw IOFailure() }
+                let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
+                guard fstat(file, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { throw IOFailure() }
+                return .file(try handle.readToEnd() ?? Data(), mode: info.st_mode & 0o7777)
+            default: throw IOFailure()
+            }
+        }
+
+        func names() throws -> [String] {
+            let listing = openat(fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            guard listing >= 0 else { throw IOFailure() }
+            guard let stream = fdopendir(listing) else { close(listing); throw IOFailure() }
+            defer { closedir(stream) }
+            var names: [String] = []
+            while true {
+                errno = 0
+                guard let entry = readdir(stream) else {
+                    guard errno == 0 else { throw IOFailure() }
+                    break
+                }
+                let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                    $0.withMemoryRebound(to: CChar.self, capacity: Int(entry.pointee.d_namlen) + 1) { String(cString: $0) }
+                }
+                if name != ".", name != ".." { names.append(name) }
+            }
+            return names
+        }
+
+        func put(_ entry: Entry, at name: String) throws {
+            let temporary = ".tilde-\(UUID().uuidString)"
+            defer { _ = unlinkat(fd, temporary, 0) }
+            switch entry {
+            case .file(let data, let mode):
+                let file = openat(fd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+                guard file >= 0 else { throw IOFailure() }
+                let handle = FileHandle(fileDescriptor: file, closeOnDealloc: true)
+                defer { try? handle.close() }
+                try handle.write(contentsOf: data)
+                guard fchmod(file, mode) == 0 else { throw IOFailure() }
+            case .link(let target):
+                guard symlinkat(target, fd, temporary) == 0 else { throw IOFailure() }
+            case .directory: throw IOFailure()
+            }
+            guard renameat(fd, temporary, fd, name) == 0 else { throw IOFailure() }
+        }
+
+        func remove(_ name: String) throws {
+            guard unlinkat(fd, name, 0) == 0 else { throw IOFailure() }
+        }
+
+        func matchesFile(_ name: String, descriptor: Int32) -> Bool {
+            var named = stat(), opened = stat()
+            return fstatat(fd, name, &named, AT_SYMLINK_NOFOLLOW) == 0 && fstat(descriptor, &opened) == 0
+                && named.st_mode & S_IFMT == S_IFREG && Identity(named) == Identity(opened)
         }
     }
 
-    /// Creates `path` as git takes a lock, only if nothing is there, and returns its descriptor. Waits a
-    /// while for another holder.
-    private static func lock(_ path: String) async throws -> Int32 {
+    /// Takes git's lock in the anchored config directory, waiting briefly for another holder.
+    private static func lock(_ name: String, in directory: Directory) async throws -> Int32 {
         let deadline = ContinuousClock.now + .seconds(2)
         while true {
-            let file = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            let file = openat(directory.fd, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
             if file >= 0 { return file }
             guard errno == EEXIST, ContinuousClock.now < deadline else { throw IOFailure() }
             try await Task.sleep(for: .milliseconds(20))

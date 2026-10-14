@@ -25,4 +25,15 @@ import TildeSupport
         #expect(!diff.isEmpty)
         #expect(await Git.diff(workdir: fixture.repo, base: base).contains("+text"))
     }
+
+    @Test(arguments: [" leading.txt", "\nleading.txt", "\"quoted\".txt", "-option.txt"])
+    func untrackedNamesPreserveEveryByte(_ name: String) async throws {
+        let fixture = GitTests()
+        try await fixture.makeRepo()
+        let base = try await Git.head(fixture.repo)
+        try "visible content\n".write(toFile: fixture.repo + "/" + name, atomically: true, encoding: .utf8)
+        #expect(try await Git.untracked(fixture.repo) == [name])
+        #expect(try await Git.diffStat(workdir: fixture.repo, base: base) == DiffStat(files: 1, insertions: 1, deletions: 0))
+        #expect(await Git.diff(workdir: fixture.repo, base: base).contains("+visible content"))
+    }
 }

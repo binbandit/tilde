@@ -46,6 +46,7 @@ public final class ChildProcess: Sendable {
     public let lines: AsyncStream<String>
 
     private let stdin: Mutex<Int32?>
+    private let inputStopped = Mutex(false)
     private let stderrTail = Mutex(Data())
     private let exitState = Mutex<(status: Int32?, waiters: [CheckedContinuation<Int32, Never>])>((nil, []))
     /// Signals and the reap share this lock, so a late signal never reaches a reused group id. `deadline`
@@ -69,6 +70,13 @@ public final class ChildProcess: Sendable {
         var inPipe: [Int32] = [0, 0], outPipe: [Int32] = [0, 0], errPipe: [Int32] = [0, 0]
         guard pipe(&inPipe) == 0, pipe(&outPipe) == 0, pipe(&errPipe) == 0 else {
             throw Failure.spawn(spec.executable, errno)
+        }
+        // A helper may retain stdin without reading it, even after leaving our process group.
+        // Polling lets closeStdin release a full-pipe writer without depending on that helper's exit.
+        guard fcntl(inPipe[1], F_SETFL, O_NONBLOCK) == 0 else {
+            let code = errno
+            (inPipe + outPipe + errPipe).forEach { close($0) }
+            throw Failure.spawn(spec.executable, code)
         }
 
         var actions: posix_spawn_file_actions_t? = nil
@@ -167,11 +175,18 @@ public final class ChildProcess: Sendable {
             try data.withUnsafeBytes { raw in
                 var offset = 0
                 while offset < raw.count {
+                    guard !inputStopped.withLock({ $0 }) else { throw Failure.stdinClosed }
                     let n = Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset)
                     if n < 0 {
                         if errno == EINTR { continue }
+                        if errno == EAGAIN {
+                            var descriptor = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+                            _ = poll(&descriptor, 1, 50)
+                            continue
+                        }
                         throw Failure.stdinClosed
                     }
+                    guard n > 0 else { throw Failure.stdinClosed }
                     offset += n
                 }
             }
@@ -179,6 +194,7 @@ public final class ChildProcess: Sendable {
     }
 
     public func closeStdin() {
+        inputStopped.withLock { $0 = true }
         stdin.withLock { fd in
             if let open = fd { close(open) }
             fd = nil
@@ -218,19 +234,19 @@ public final class ChildProcess: Sendable {
 
     /// SIGTERM the group and SIGKILL whatever is left after `grace`. Returns once all of it is gone.
     public func terminate(grace: Duration = ChildProcess.grace) async {
+        inputStopped.withLock { $0 = true }
         groupState.withLock { state in
             guard !state.reaped else { return }
             let deadline = ContinuousClock.now + grace
             state.deadline = min(state.deadline ?? deadline, deadline)
             killpg(pid, SIGTERM)
         }
-        // Signalled first, so a write blocked on a full pipe fails once its reader dies and frees stdin.
-        closeStdin()
-        // The wait can't be cancelled, so the deadline runs beside it rather than racing it.
+        // Arm escalation before acquiring stdin's lock. A stopped writer releases it on its next poll.
         let killer = Task {
             try? await Task.sleep(for: grace)
             if !Task.isCancelled { self.signalGroup(SIGKILL) }
         }
+        closeStdin()
         await withCheckedContinuation { continuation in
             groupDone.notify(queue: .global()) { continuation.resume() }
         }

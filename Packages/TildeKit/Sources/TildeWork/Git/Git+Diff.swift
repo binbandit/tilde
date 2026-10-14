@@ -40,7 +40,9 @@ extension Git {
 
     /// Untracked files, as paths: NUL-separated, so a name with a newline or one git would quote stays whole.
     static func untracked(_ workdir: String) async throws -> [String] {
-        try await Shell.check(reading + ["ls-files", "--others", "--exclude-standard", "-z"], cwd: workdir)
-            .split(separator: "\0").map(String.init)
+        let command = reading + ["ls-files", "--others", "--exclude-standard", "-z"]
+        let output = try await Shell.run(command, cwd: workdir)
+        guard output.ok else { throw Shell.Failed(command: command, output: output) }
+        return output.stdout.split(separator: "\0").map(String.init)
     }
 }

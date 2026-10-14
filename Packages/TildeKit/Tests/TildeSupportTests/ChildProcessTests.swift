@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 @testable import TildeSupport
 
@@ -76,5 +77,35 @@ import Testing
         for await line in child.lines { lines.append(line) }
         #expect(lines.sorted() == [first, second])
         #expect(await child.waitForExit() == 0)
+    }
+
+    @Test func terminationEscalatesWhileANonreadingChildHoldsAFullStdinPipe() async throws {
+        let child = try spawn("trap '' TERM; echo ready; exec sleep 30")
+        defer { killpg(child.pid, SIGKILL) }
+        var lines = child.lines.makeAsyncIterator()
+        #expect(await lines.next() == "ready")
+        let writeFinished = Mutex(false), stopFinished = Mutex(false), watchdogFired = Mutex(false)
+        let writing = Task.detached {
+            try? child.write(Data(repeating: 65, count: 1_000_000))
+            writeFinished.withLock { $0 = true }
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(!writeFinished.withLock { $0 })
+        // Keep the regression bounded even if termination never reaches its own SIGKILL timer.
+        let watchdog = Task.detached {
+            try? await Task.sleep(for: .seconds(2))
+            if !Task.isCancelled, !stopFinished.withLock({ $0 }) {
+                watchdogFired.withLock { $0 = true }
+                killpg(child.pid, SIGKILL)
+            }
+        }
+        defer { watchdog.cancel() }
+        let started = ContinuousClock.now
+        await child.terminate(grace: .milliseconds(100))
+        stopFinished.withLock { $0 = true }
+        await writing.value
+        #expect(!watchdogFired.withLock { $0 })
+        #expect(ContinuousClock.now - started < .seconds(1))
+        #expect(child.exitStatus == 128 + SIGKILL)
     }
 }
