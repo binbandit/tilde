@@ -6,20 +6,26 @@ import CoreGraphics
 nonisolated struct InletMinimization {
     struct MessageState {
         var id: String
-        var isReply: Bool = true
-        var streaming = false
-        var failed = false
+        var isReply: Bool
+        var streaming: Bool
+        var failed: Bool
         var attentionID: String?
     }
 
     private(set) var isMinimized = false
+    /// Where the Inlet was put away from: hovering there doesn't bring it straight back,
+    /// until the pointer has left it once.
     private(set) var excludedHoverRect: CGRect?
     private var previous: [String: MessageState] = [:]
 
-    mutating func minimize(in rect: CGRect, messages: [MessageState] = []) {
+    mutating func minimize(in rect: CGRect, messages: [MessageState]) {
         isMinimized = true
-        excludedHoverRect = rect.insetBy(dx: -16, dy: -16)
+        excludeHover(around: rect)
         previous = Dictionary(messages.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })
+    }
+
+    mutating func excludeHover(around rect: CGRect) {
+        excludedHoverRect = rect.insetBy(dx: -16, dy: -16)
     }
 
     mutating func open() {
@@ -43,10 +49,5 @@ nonisolated struct InletMinimization {
             if message.failed, old?.failed != true { return true }
             return message.isReply && !message.streaming && (old == nil || old?.streaming == true)
         }?.id
-    }
-
-    static func pointerIsReadingPeek(at point: CGPoint, shownAt origin: CGPoint?, in rect: CGRect) -> Bool {
-        guard rect.insetBy(dx: -16, dy: -16).contains(point) else { return false }
-        return origin.map { hypot(point.x - $0.x, point.y - $0.y) >= 4 } ?? true
     }
 }

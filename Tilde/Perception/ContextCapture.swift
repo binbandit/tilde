@@ -1,51 +1,38 @@
 import AppKit
 import ApplicationServices
+import Synchronization
 
 /// Takes only identity and geometry before focus changes, then resolves the original target away
-/// from the main actor. One instance belongs to one exchange, including any re-aims during a hold.
+/// from the main thread. One instance belongs to one exchange, including any re-aims during a hold.
 @MainActor
 final class ContextCapture {
     typealias Collector = @Sendable (Pointing.Request) -> Referent?
 
-    private actor Reader {
-        let collect: Collector
+    private let collect: Collector
+    /// AX reads block (a quarter of a second a call against a hung app), so they take turns on
+    /// their own queue instead of holding up Swift's shared threads.
+    private let queue = DispatchQueue(label: "dev.tilde.context-capture")
+    /// Only the latest request counts: older ones are skipped if they haven't started, and dropped if they have.
+    private nonisolated let latest = Atomic<UInt64>(0)
 
-        init(collect: @escaping Collector) { self.collect = collect }
+    init(collect: @escaping Collector = Pointing.capture) { self.collect = collect }
 
-        func read(_ request: Pointing.Request) -> Referent? {
-            // A slow app can hold up one request. Superseded requests waiting behind it do no AX work.
-            guard !Task.isCancelled else { return nil }
-            return collect(request)
-        }
-    }
-
-    private let reader: Reader
-    private var task: Task<Void, Never>?
-    private var generation: UInt64 = 0
-
-    init(collect: @escaping Collector = Pointing.capture) { reader = Reader(collect: collect) }
-
-    /// Invalidate the previous target immediately, before waiting on a new read.
-    /// Otherwise sending while re-aim B is pending could still attach accepted aim A.
-    /// Updates deliver nil first and then the active result, even when that is nil.
-    func start(_ request: Pointing.Request?, update: @escaping @MainActor (Referent?) -> Void) {
-        cancel()
-        update(nil)
+    /// Hands back what `request` points at, unless something newer was asked for first. Finding
+    /// nothing changes nothing, so what was found before stays until something replaces it.
+    func start(_ request: Pointing.Request?, update: @escaping @MainActor @Sendable (Referent) -> Void) {
+        let generation = latest.add(1, ordering: .relaxed).newValue
         guard let request else { return }
-        let generation = generation
-        let reader = reader
-        task = Task { [weak self] in
-            let result = await reader.read(request)
-            guard !Task.isCancelled, let self, self.generation == generation else { return }
-            self.task = nil
-            update(result)
+        let collect = collect
+        queue.async {
+            guard self.latest.load(ordering: .relaxed) == generation, let referent = collect(request) else { return }
+            Task { @MainActor in
+                if self.latest.load(ordering: .relaxed) == generation { update(referent) }
+            }
         }
     }
 
     func cancel() {
-        generation &+= 1
-        task?.cancel()
-        task = nil
+        latest.add(1, ordering: .relaxed)
     }
 
     /// Call before making the Inlet key. This does no Accessibility or shell-process work.

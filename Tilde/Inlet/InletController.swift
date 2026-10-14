@@ -56,14 +56,7 @@ final class InletController {
         InletActions(
             send: { [weak self] in self?.send($0) },
             openJob: { [weak self] in self?.openJob($0) },
-            compose: { [weak self] in
-                guard let self else { return }
-                if self.inlet.mode != .compose, self.exchangeTarget == nil {
-                    self.composeCapturingContext()
-                } else {
-                    self.set(.compose)
-                }
-            },
+            compose: { [weak self] in self?.reachForComposer() },
             dismiss: { [weak self] in self?.dismiss() },
             unpoint: { [weak self] in self?.unpoint() },
             minimize: { [weak self] in self?.minimize() },
@@ -96,6 +89,10 @@ final class InletController {
             // A fullscreen space hides the menu bar, which a top Inlet sizes itself to.
             NSWorkspace.shared.notificationCenter.addObserver(
                 forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main, using: place),
+            // Clicking into the open Inlet's composer is reaching for it.
+            center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: panel, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { if self?.inlet.mode == .open { self?.reachForComposer() } }
+            },
             // Clicking away from the composer or a review puts the Inlet back to rest.
             center.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.resignedKey() }
@@ -125,10 +122,10 @@ final class InletController {
         hoverTask?.cancel()
         hoverTask = nil
         hoverIntent = nil
-        if mode == .open || mode == .compose || mode == .listening {
-            minimization.open()
+        switch mode {
+        case .rest, .peek: break
+        default: minimization.open()
         }
-        if case .job = mode { minimization.open() }
         let changed = inlet.mode != mode
         inlet.mode = mode
         // A peek's timer belongs to that peek.
@@ -140,7 +137,7 @@ final class InletController {
         if mode == .rest { exchangeTarget = nil }
         // Held news is told while you're looking.
         model.conductor?.looking = inlet.isConversation
-        panel?.acceptsKey = inlet.wantsKey && focus
+        panel?.acceptsKey = inlet.canType
         if inlet.wantsKey && focus, let panel {
             NSApp.activate()
             panel.makeKey()
@@ -154,7 +151,7 @@ final class InletController {
     /// Clicking somewhere else puts the Inlet away; an unsent draft waits in the composer for next time.
     private func resignedKey() {
         switch inlet.mode {
-        case .job, .compose: minimize()
+        case .job, .compose: putAway()
         default: break
         }
     }
@@ -220,10 +217,7 @@ final class InletController {
         }
         if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             model.send(text, about: request.target)
-            if ownsPresentation {
-                exchangeTarget = nil
-                afterSending()
-            }
+            if ownsPresentation { afterSending() }
         } else if ownsPresentation {
             if cancelled { return set(.rest) }
             model.missedYou = true
@@ -250,7 +244,17 @@ final class InletController {
         contextCapture.start(request) { [weak self] referent in
             guard let self, self.inlet.mode == .compose else { return }
             self.exchangeTarget = referent
-            if point != nil, let referent { self.lens.flash(on: referent) }
+            if point != nil { self.lens.flash(on: referent) }
+        }
+    }
+
+    /// You reached for the composer in the open Inlet: it takes the keyboard, and the app
+    /// you were in comes along as "this" unless something is already pointed at.
+    private func reachForComposer() {
+        if inlet.mode != .compose, exchangeTarget == nil {
+            composeCapturingContext()
+        } else {
+            set(.compose)
         }
     }
 
@@ -261,8 +265,17 @@ final class InletController {
         lens.hide()
     }
 
+    /// Tucked away until something's done: replies peek out once they're written, questions and failures at once.
     func minimize() {
-        minimization.minimize(in: inletRect, messages: notificationStates)
+        minimization.minimize(in: inletRect, messages: messageStates)
+        lens.hide()
+        set(.rest)
+    }
+
+    /// Back to rest, with replies still peeking out as they're written, but not straight back
+    /// out under a pointer that's still where the Inlet was.
+    private func putAway() {
+        minimization.excludeHover(around: inletRect)
         lens.hide()
         set(.rest)
     }
@@ -290,9 +303,9 @@ final class InletController {
     private func captureListeningContext(_ request: Pointing.Request?) {
         guard let session = voiceExchangeID, releasedVoiceID == nil, ownsVoicePresentation(session) else { return }
         contextCapture.start(request) { [weak self] referent in
-            guard let self, self.ownsVoicePresentation(session), self.releasedVoiceID == nil else { return }
+            guard let self, self.ownsVoicePresentation(session), self.releasedVoiceID == nil, referent != self.exchangeTarget else { return }
             self.exchangeTarget = referent
-            if let referent { self.lens.show(on: referent) } else { self.lens.hide() }
+            self.lens.show(on: referent)
         }
     }
 
@@ -302,12 +315,12 @@ final class InletController {
         contextCapture.cancel()
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return set(.rest) }
         model.send(text, about: exchangeTarget)
-        // "This" belonged to what you just said; the next thing starts fresh.
-        exchangeTarget = nil
         afterSending()
     }
 
     private func afterSending() {
+        // "This" belonged to what you just said; the next thing starts fresh.
+        exchangeTarget = nil
         cancelVoiceExchange()
         if inlet.preferences.minimizeAfterSending { return minimize() }
         if let reply = model.thread.last, reply.from == .tilde {
@@ -330,13 +343,14 @@ final class InletController {
             backToConversation = false
             set(.compose)
         } else {
-            minimize()
+            putAway()
         }
     }
 
+    /// Explicit minimization remains in effect while completed replies and questions peek out.
     var isMinimized: Bool { minimization.isMinimized }
 
-    private var notificationStates: [InletMinimization.MessageState] {
+    private var messageStates: [InletMinimization.MessageState] {
         model.thread.map { message in
             let failed: Bool
             if case .failed = message.delivery { failed = true } else { failed = message.trouble }
@@ -353,7 +367,7 @@ final class InletController {
         seen.formUnion(thread.map(\.id))
         let notice: String?
         if minimization.isMinimized {
-            notice = minimization.latestNotice(in: notificationStates)
+            notice = minimization.latestNotice(in: messageStates)
         } else {
             notice = fresh.last?.id
         }
@@ -387,6 +401,17 @@ final class InletController {
 
     private var isPeek: Bool { if case .peek = inlet.mode { true } else { false } }
 
+    /// The pointer is where it was when the peek came out: it was resting there, not coming for the peek.
+    private func pointerStayed(at mouse: CGPoint) -> Bool {
+        pointerAtPeek.map { hypot(mouse.x - $0.x, mouse.y - $0.y) < 4 } ?? false
+    }
+
+    /// The pointer came to the peek and is on it.
+    private var readingPeek: Bool {
+        let mouse = NSEvent.mouseLocation
+        return inletRect.insetBy(dx: -16, dy: -16).contains(mouse) && !pointerStayed(at: mouse)
+    }
+
     /// Returns the peek of `id` to rest after a while, unless you're using it.
     private func settle(_ id: String, after delay: Duration) {
         guard settlingID != id else { return }
@@ -397,9 +422,7 @@ final class InletController {
             // While you're on it, it waits for you to move off (a question's peek, say, doesn't open under you).
             while !Task.isCancelled {
                 guard let self, case .peek(let showing) = self.inlet.mode, showing == id else { return }
-                if !InletMinimization.pointerIsReadingPeek(at: NSEvent.mouseLocation, shownAt: self.pointerAtPeek, in: self.inletRect) {
-                    return self.set(.rest)
-                }
+                if !self.readingPeek { return self.set(.rest) }
                 try? await Task.sleep(for: .seconds(1))
             }
         }
@@ -466,7 +489,7 @@ final class InletController {
             // would move away as the conversation opened under the pointer (its mark opens it instead).
             if NSEvent.pressedMouseButtons != 0 { return nil }
             if case .peek(let id) = inlet.mode {
-                if let at = pointerAtPeek, hypot(mouse.x - at.x, mouse.y - at.y) < 4 { return nil }
+                if pointerStayed(at: mouse) { return nil }
                 if let asked = model.thread.first(where: { $0.id == id })?.attentionID, model.attention.contains(where: { $0.id == asked }) {
                     return nil
                 }

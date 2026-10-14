@@ -8,21 +8,26 @@ struct PeekView: View {
     var messageID: String
     var actions: InletActions
 
+    @State private var hovered = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Spacer()
+        message
+            // Tucking tilde away is there when you reach for it, not a row above every peek.
+            .overlay(alignment: .topTrailing) {
                 Button(action: actions.minimize) {
                     Image(systemName: "minus").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.text3)
                         .frame(width: 24, height: 24)
+                        .background(Theme.ink.opacity(0.8), in: .circle)
                         .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
                 .help("Minimize chat")
                 .accessibilityLabel("Minimize chat")
+                .offset(x: 6, y: -6)
+                .opacity(hovered ? 1 : 0)
             }
-            message
-        }
+            .onHover { hovered = $0 }
+            .animation(Theme.quick, value: hovered)
     }
 
     @ViewBuilder private var message: some View {

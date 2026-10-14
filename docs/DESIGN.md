@@ -44,7 +44,7 @@ The `~` mark is tilde's face. It breathes when idle, travels while agents work, 
 
 Notifications are only for when you're away (no input for a minute). While you're at the Mac, the Inlet does the talking.
 
-The static `~` in the menu bar opens Settings and offers Quit. Settings isn't hidden behind a right-click on the Inlet. Launch at login is optional and off until you enable it; the setting reflects macOS's registration and approval state.
+The `~` in the menu bar opens Settings and offers Quit. Launch at login is off until you turn it on in Settings.
 
 Motion: the black is drawn from the bezel itself, so it never leaves the screen's edge. Opening, it grows out of the edge and content surfaces in it; closing, content is drawn back into the edge (shrinking, softening, fading) a beat ahead of the black, which lands with a small give, like a drop meeting a surface. One message replaces another by going back in as the next comes out.
 
@@ -78,12 +78,13 @@ Only the actions that fit where the job is:
 | While it's | You can |
 |---|---|
 | Working or waiting | Stop (in the field), take over, open in your editor |
-| Ready | Discard, take over, open in your editor, open its PR once there is one, **bring it in** (⌘↩); verified no-change results, work done in place, and scratch work are **Done** |
+| Ready | Discard, take over, open in your editor, open its PR once there is one, **bring it in** (⌘↩); work that changed nothing, or was done in place or in scratch, is just **Done** |
 | Stopped or failed | Discard, take over, open in your editor, or tell it how to carry on |
-| Landed or acknowledged | Open its PR; inspect or discard a retained no-change worktree |
+| Landed | Open its PR |
+| Done | Discard its worktree, which stays until you do |
 
 - **Bring it in**: rebase onto your current branch and fast-forward your checkout (never into a dirty tree).
-- **Done**: acknowledges the completed result without landing a branch. For no-change worktrees, the worktree remains available for inspection or explicit discard.
+- **Done**: signs the job off without bringing anything in.
 - **Take over**: stops the worker and resumes its session in your terminal: in herdr, beside your other agents, when it's installed ([terminal agents](TERMINAL_AGENTS.md)).
 
 ## Look
@@ -106,6 +107,5 @@ Motion is spring-based: the shape morphs, it doesn't fade between screens. Text 
 - Workers can commit in their worktree but never change what makes git run code (the repo's config and hooks): Claude's sandbox can't write them, and anything a turn changes there is put back, with a word to you.
 - `rules.md` is yours: memory never adds to it, and a dream that edits it is undone.
 - What tilde records of your day keeps window titles only for work (terminals, editors, git clients, development pages in a browser); elsewhere, only the app's name.
-- Worker permissions default to owner approval. An explicit per-job, per-turn owner opt-in permits only exact Claude folder-listing commands documented in README. Unknown commands and all permission rails remain outside that policy; model labels and notebook text never authorize them.
-- Approval buttons do not append ordinary chat messages. Decisions and reasons remain in the job transcript and `tasks/<job>.md`.
+- Every decision the manager makes is logged with its reason in `tasks/<job>.md`.
 - Everything tilde knows is markdown in a git repo you own.
