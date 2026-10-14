@@ -15,25 +15,83 @@ icon:
 build configuration="Debug": gen
     xcodebuild -project Tilde.xcodeproj -scheme Tilde -configuration {{configuration}} -derivedDataPath {{derived}} -destination 'platform=macOS' build -quiet
 
-# Build Release, replace tilde.app in /Applications (or the folder given) and relaunch it
-install destination="/Applications": (build "Release")
+# Build Release and relaunch in /Applications, falling back to ~/Applications unless a folder is given
+install destination="": (build "Release")
     #!/bin/bash
     set -euo pipefail
-    mkdir -p {{quote(destination)}}
-    target={{quote(destination / "tilde.app")}}
+    directory={{quote(destination)}}
+    if [[ -z "$directory" ]]; then directory=/Applications; fallback="$HOME/Applications"; else fallback=; fi
+    [[ "$directory" == /* ]] || directory="$PWD/$directory"
     # Stage beside the destination so the swap is a rename on the same volume.
-    stage=$(mktemp -d {{quote(destination / ".tilde-install.XXXXXX")}})
-    trap 'rm -rf "$stage"' EXIT
-    ditto {{quote(products / "Release/tilde.app")}} "$stage/tilde.app"
-    # Ask tilde to quit, and kill it if it's still there after five seconds.
-    if pgrep -x tilde >/dev/null; then
-        osascript -e 'quit app id "dev.tilde.app"' || true
-        for _ in {1..50}; do pgrep -x tilde >/dev/null || break; sleep 0.1; done
-        pkill -KILL -x tilde && sleep 0.5 || true
+    if ! mkdir -p -- "$directory" || ! stage=$(mktemp -d "$directory/.tilde-install.XXXXXX"); then
+        [[ -n "$fallback" ]] || exit 1
+        directory="$fallback"
+        mkdir -p -- "$directory"
+        stage=$(mktemp -d "$directory/.tilde-install.XXXXXX")
     fi
-    rm -rf "$target"
-    mv "$stage/tilde.app" "$target"
-    open "$target"
+    target="$directory/tilde.app"
+    previous="$stage/previous.app"
+    cleanup() {
+        if [[ -e "$previous" || -L "$previous" ]]; then
+            echo "Previous installation retained at $previous" >&2
+        else
+            rm -rf -- "$stage"
+        fi
+    }
+    trap cleanup EXIT
+    ditto {{quote(products / "Release/tilde.app")}} "$stage/tilde.app"
+    # AppKit handles identify the bundle and executable, and avoid PID reuse.
+    stop() {
+        osascript -l JavaScript <<'JXA'
+    function run() {
+        ObjC.import('AppKit');
+        function running() {
+            var found = [], apps = $.NSRunningApplication.runningApplicationsWithBundleIdentifier('dev.tilde.app');
+            for (var i = 0; i < apps.count; i++) {
+                var app = apps.objectAtIndex(i);
+                if (app.isTerminated) continue;
+                var bundle = ObjC.unwrap(app.bundleURL.URLByResolvingSymlinksInPath.path);
+                var executable = ObjC.unwrap(app.executableURL.URLByResolvingSymlinksInPath.path);
+                if (/\.app$/i.test(bundle) && executable === bundle + '/Contents/MacOS/tilde') found.push(app);
+            }
+            return found;
+        }
+        function wait(apps, seconds) {
+            var deadline = $.NSProcessInfo.processInfo.systemUptime + seconds;
+            while (apps.some(function(app) { return !app.isTerminated; })) {
+                if ($.NSProcessInfo.processInfo.systemUptime >= deadline) return false;
+                $.NSRunLoop.currentRunLoop.runUntilDate($.NSDate.dateWithTimeIntervalSinceNow(0.1));
+            }
+            return true;
+        }
+        var apps = running();
+        apps.forEach(function(app) { app.terminate; });
+        if (!wait(apps, 5)) {
+            apps.filter(function(app) { return !app.isTerminated; }).forEach(function(app) { app.forceTerminate; });
+            if (!wait(apps, 3)) throw new Error('tilde did not stop');
+        }
+        if (running().length) throw new Error('tilde restarted during shutdown');
+        return apps.length;
+    }
+    JXA
+    }
+    running=$(stop)
+    restore() {
+        if [[ -e "$previous" || -L "$previous" ]]; then
+            mv -- "$previous" "$target"
+            if [[ "$running" != 0 ]]; then open -n "$target" || true; fi
+        fi
+    }
+    if [[ -e "$target" || -L "$target" ]]; then mv -- "$target" "$previous"; fi
+    if ! mv -- "$stage/tilde.app" "$target"; then restore; exit 1; fi
+    if ! open -n "$target"; then
+        # A failed launch may still have started; stop it before restoring the old bundle.
+        stop >/dev/null
+        mv -- "$target" "$stage/failed.app"
+        restore
+        exit 1
+    fi
+    rm -rf -- "$previous"
     echo "Installed $target"
 
 # Terminal handoff quoting, without opening Terminal
