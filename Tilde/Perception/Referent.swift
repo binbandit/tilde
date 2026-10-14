@@ -58,9 +58,8 @@ nonisolated enum Pointing {
 
     /// Blocking AX and process work. Call through ContextCapture on interactive paths.
     static func capture(_ request: Request) -> Referent? {
-        guard !Task.isCancelled else { return nil }
         if let result = referent(in: request.application, at: request.point, request: request) { return result }
-        guard !Task.isCancelled, let fallback = request.fallback else { return nil }
+        guard let fallback = request.fallback else { return nil }
         return referent(in: fallback, at: nil, request: request)
     }
 
@@ -73,7 +72,7 @@ nonisolated enum Pointing {
             guard AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &hit) == .success else { return nil }
         }
         let window = hit.flatMap { ancestor(of: $0, role: kAXWindowRole) } ?? focusedWindow(app.pid)
-        guard let window, !Task.isCancelled else { return nil }
+        guard let window else { return nil }
         let element = hit ?? window
         let windowTitle = string(window, kAXTitleAttribute)
         var document = string(window, kAXDocumentAttribute).flatMap(path(fromURL:))
@@ -104,7 +103,6 @@ nonisolated enum Pointing {
         }
 
         var cwd: String?
-        guard !Task.isCancelled else { return nil }
         if let bundle = app.bundleID, terminals.contains(bundle) {
             cwd = Shells.cwd(forTerminal: app.pid, title: windowTitle)
             if let cwd { label = "\((cwd as NSString).abbreviatingWithTildeInPath) · \(name)" }
@@ -162,7 +160,6 @@ nonisolated enum Pointing {
     }
 
     static func value(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
-        guard !Task.isCancelled else { return nil }
         var result: CFTypeRef?
         return AXUIElementCopyAttributeValue(element, attribute as CFString, &result) == .success ? result : nil
     }

@@ -43,8 +43,11 @@ final class ConversationVisibility {
     }
 
     func canClear(_ messages: [Message], questions: Set<String>) -> Bool {
-        let protected = protectedIDs(in: messages, questions: questions)
-        return messages.contains { !hidden.contains($0.id) && !protected.contains($0.id) }
+        canClear(messages, protecting: protectedIDs(in: messages, questions: questions))
+    }
+
+    func canClear(_ messages: [Message], protecting protected: Set<String>) -> Bool {
+        messages.contains { !hidden.contains($0.id) && !protected.contains($0.id) }
     }
 
     func clear(_ messages: [Message], questions: Set<String>) {

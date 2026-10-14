@@ -17,7 +17,7 @@ struct CompactInlet: View {
             case (.top, let notch?):
                 HStack(spacing: 0) {
                     Group {
-                        if !preferences.hideMark { TildeMark(mood: mood, size: 18) }
+                        if showsMark { TildeMark(mood: mood, size: 18) }
                         else { Color.clear }
                     }
                     .frame(width: Inlet.wing)
@@ -27,14 +27,14 @@ struct CompactInlet: View {
                 .frame(height: notch.height)
             case (.top, nil):
                 HStack(spacing: 12) {
-                    if !preferences.hideMark { TildeMark(mood: mood, size: 18) }
+                    if showsMark { TildeMark(mood: mood, size: 18) }
                     if !model.crew.isEmpty { dots }
                 }
                 .padding(.horizontal, 15)
                 .frame(height: placement.menuBar)
             case (let edge, _):
                 VStack(spacing: 14) {
-                    if !preferences.hideMark { TildeMark(mood: mood, size: 20) }
+                    if showsMark { TildeMark(mood: mood, size: 20) }
                     dots
                 }
                 .frame(width: Inlet.pill.width, height: Inlet.pill.height)
@@ -60,6 +60,9 @@ struct CompactInlet: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(crew.map { "\($0.title), \(JobStatus.words($0))" }.joined(separator: "; "))
     }
+
+    /// Hiding the ~ never hides that something needs you.
+    private var showsMark: Bool { !preferences.hideMark || !model.attention.isEmpty }
 
     private var mood: TildeMark.Mood {
         if !model.attention.isEmpty { return .needsYou }
